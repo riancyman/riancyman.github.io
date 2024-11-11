@@ -430,7 +430,7 @@ configure_ufw() {
 install_bbr() {
     if ! check_reinstall "BBR加速" "BBR_INSTALLED"; then
         return 0
-    }
+    fi
 
     log "INFO" "开始安装 BBR 加速..."
 
