@@ -16,6 +16,34 @@ GITHUB_API_URL="https://api.github.com/repos/p4gefau1t/trojan-go/releases/latest
 NGINX_KEY_URL="https://nginx.org/keys/nginx_signing.key"
 ACME_INSTALL_URL="https://get.acme.sh"
 
+# 检查端口是否被占用
+check_port() {
+    local port=$1
+    if ss -tuln | grep -q ":${port} "; then
+        return 1
+    fi
+    return 0
+}
+
+# 检查系统资源
+check_system_resources() {
+    # 检查内存
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    if [ $mem_total -lt 512 ]; then
+        log "ERROR" "系统内存不足，建议至少512M内存"
+        return 1
+    fi
+    
+    # 检查磁盘空间
+    local disk_free=$(df -m / | awk 'NR==2 {print $4}')
+    if [ $disk_free -lt 1024 ]; then
+        log "ERROR" "磁盘空间不足，建议至少1GB可用空间"
+        return 1
+    fi
+    
+    return 0
+}
+
 # 初始化状态文件
 init_status_file() {
     mkdir -p "$INSTALL_STATUS_DIR"
@@ -84,24 +112,6 @@ check_reinstall() {
     return 0
 }
 
-# 显示菜单
-show_menu() {
-    clear
-    echo "========== Trojan-Go 安装管理系统 =========="
-    echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 2. 安装配置 Nginx $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 3. 申请配置 SSL 证书 $(if [ "$(get_status CERT_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 4. 安装配置 Trojan-Go $(if [ "$(get_status TROJAN_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 5. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 6. 安装配置 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo " 7. 查看配置信息"
-    echo " 8. 查看运行状态"
-    echo " 9. 重启所有服务"
-    echo " 10. 卸载所有组件"
-    echo " 0. 退出"
-    echo "==========================================="
-}
-
 # 系统环境准备函数
 prepare_system() {
     if ! check_reinstall "系统环境" "SYSTEM_PREPARED"; then
@@ -109,6 +119,11 @@ prepare_system() {
     fi
 
     log "INFO" "准备系统环境..."
+    
+    # 检查系统资源
+    if ! check_system_resources; then
+        return 1
+    fi
     
     # 更新系统
     apt update
@@ -128,7 +143,6 @@ prepare_system() {
     log "SUCCESS" "系统环境准备完成"
     return 0
 }
-
 
 # 安装 Nginx
 install_nginx() {
@@ -158,19 +172,19 @@ install_nginx() {
     mkdir -p /tmp/web
 
     # 伪装站点选择
-echo "请选择伪装站点类型:"
-echo "1. 简单个人主页"
-echo "2. 技术博客"
-echo "3. 图片站"
-echo "4. 下载站"
-echo "5. 自定义网站"
+    echo "请选择伪装站点类型:"
+    echo "1. 简单个人主页"
+    echo "2. 技术博客"
+    echo "3. 图片站"
+    echo "4. 下载站"
+    echo "5. 自定义网站"
 
-read -p "请选择 [1-5]: " site_type
+    read -p "请选择 [1-5]: " site_type
 
-case "$site_type" in
-    1)
-        # 简单个人主页
-        cat > /usr/share/nginx/html/index.html << 'EOF'
+    case "$site_type" in
+        1)
+            # 简单个人主页
+            cat > /usr/share/nginx/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -194,10 +208,10 @@ case "$site_type" in
 </body>
 </html>
 EOF
-        ;;
-    2)
-        # 技术博客
-        cat > /usr/share/nginx/html/index.html << 'EOF'
+            ;;
+        2)
+            # 技术博客
+            cat > /usr/share/nginx/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -226,10 +240,10 @@ EOF
 </body>
 </html>
 EOF
-        ;;
-    3)
-        # 图片站
-        cat > /usr/share/nginx/html/index.html << 'EOF'
+            ;;
+        3)
+            # 图片站
+            cat > /usr/share/nginx/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -254,10 +268,10 @@ EOF
 </body>
 </html>
 EOF
-        ;;
-    4)
-        # 下载站
-        cat > /usr/share/nginx/html/index.html << 'EOF'
+            ;;
+        4)
+            # 下载站
+            cat > /usr/share/nginx/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -283,14 +297,14 @@ EOF
 </body>
 </html>
 EOF
-        ;;
-    5)
-        read -p "请输入你的自定义网站URL（html格式）: " custom_url
-        if [ -n "$custom_url" ]; then
-            curl -o /usr/share/nginx/html/index.html "$custom_url"
-            if [ $? -ne 0 ]; then
-                log "ERROR" "下载自定义网站失败，使用默认页面"
-                cat > /usr/share/nginx/html/index.html << 'EOF'
+            ;;
+        5)
+            read -p "请输入你的自定义网站URL（html格式）: " custom_url
+            if [ -n "$custom_url" ]; then
+                curl -o /usr/share/nginx/html/index.html "$custom_url"
+                if [ $? -ne 0 ]; then
+                    log "ERROR" "下载自定义网站失败，使用默认页面"
+                    cat > /usr/share/nginx/html/index.html << 'EOF'
 <!DOCTYPE html>
 <html>
 <head>
@@ -305,25 +319,13 @@ EOF
 </body>
 </html>
 EOF
+                fi
             fi
-        fi
-        ;;
-    *)
-        log "ERROR" "无效的选择，使用默认页面"
-        ;;
-esac
-
-    # 设置目录权限
-    chown -R nginx:nginx /usr/share/nginx/html
-    chmod -R 755 /usr/share/nginx/html
-
-    # 解压并部署网站
-    if [ -f web.zip ]; then
-        unzip -o web.zip -d /tmp/web
-        rm -rf /usr/share/nginx/html/*
-        mv /tmp/web/$theme/* /usr/share/nginx/html/
-        rm -rf /tmp/web web.zip
-    fi
+            ;;
+        *)
+            log "ERROR" "无效的选择，使用默认页面"
+            ;;
+    esac
 
     # 配置 Nginx
     cat > /etc/nginx/conf.d/default.conf << 'EOF'
@@ -332,7 +334,7 @@ server {
     listen [::]:80;
     server_name _;
     root /usr/share/nginx/html;
-    index index.html index.htm index.php;
+    index index.html index.htm;
 
     location / {
         try_files $uri $uri/ =404;
@@ -408,7 +410,8 @@ install_cert() {
 
     # 创建证书目录
     mkdir -p /etc/trojan-go/cert
-    
+    chmod 700 /etc/trojan-go/cert
+
     # 申请证书
     ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
         --key-file /etc/trojan-go/cert/${domain}.key \
@@ -421,6 +424,7 @@ install_cert() {
     fi
 
     # 设置证书权限
+    chmod 644 /etc/trojan-go/cert/${domain}.p
     chmod 644 /etc/trojan-go/cert/${domain}.pem
     chmod 600 /etc/trojan-go/cert/${domain}.key
 
@@ -435,100 +439,96 @@ install_cert() {
 
 # 安装 Trojan-Go
 install_trojan() {
-    if ! check_reinstall "Trojan-Go" "TROJAN_INSTALLED"; then
-        return 0
-    fi
+   if ! check_reinstall "Trojan-Go" "TROJAN_INSTALLED"; then
+       return 0
+   fi
 
-    local domain=$(get_status DOMAIN)
-    if [ -z "$domain" ]; then
-        log "ERROR" "请先完成证书配置"
-        return 1
-    fi
+   local domain=$(get_status DOMAIN)
+   if [ -z "$domain" ]; then
+       log "ERROR" "请先完成证书配置"
+       return 1
+   fi
 
-    log "INFO" "开始安装 Trojan-Go..."
+   log "INFO" "开始安装 Trojan-Go..."
 
-    # 配置端口
-    local port
-    while true; do
-        read -p "请输入 Trojan-Go 端口 [默认443]: " port
-        if [ -z "$port" ]; then
-            port=443
-            break
-        elif [[ "$port" =~ ^[1-9][0-9]*$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-            if check_port $port; then
-                break
-            else
-                log "ERROR" "端口 $port 已被占用，请选择其他端口"
-            fi
-        else
-            log "ERROR" "请输入1-65535之间的有效端口号"
-        fi
-    done
+   # 配置端口
+   local port
+   while true; do
+       read -p "请输入 Trojan-Go 端口 [默认443]: " port
+       if [ -z "$port" ]; then
+           port=443
+           break
+       elif [[ "$port" =~ ^[1-9][0-9]*$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+           if check_port $port; then
+               break
+           else
+               log "ERROR" "端口 $port 已被占用，请选择其他端口"
+           fi
+       else
+           log "ERROR" "请输入1-65535之间的有效端口号"
+       fi
+   done
 
-    # 配置密码
-    local password
-    while true; do
-        read -p "请设置 Trojan-Go 密码 [留空则随机生成]: " password
-        if [ -z "$password" ]; then
-            password=$(openssl rand -base64 16)
-            log "INFO" "已生成随机密码: $password"
-            break
-        elif [[ "${#password}" -ge 6 ]]; then
-            break
-        else
-            log "ERROR" "密码长度必须大于等于6位"
-        fi
-    done
+   # 配置密码
+   local password
+   while true; do
+       read -p "请设置 Trojan-Go 密码 [留空则随机生成]: " password
+       if [ -z "$password" ]; then
+           password=$(openssl rand -base64 16)
+           log "INFO" "已生成随机密码: $password"
+           break
+       elif [[ "${#password}" -ge 6 ]]; then
+           break
+       else
+           log "ERROR" "密码长度必须大于等于6位"
+       fi
+   done
 
-    # 下载最新版本
-    local version=$(curl -fsSL ${GITHUB_API_URL} | grep tag_name | cut -d'"' -f4)
-    local arch="amd64"
-    local download_url="https://github.com/p4gefau1t/trojan-go/releases/download/${version}/trojan-go-linux-${arch}.zip"
-    
-    wget -O /tmp/trojan-go.zip ${download_url}
-    if [ $? -ne 0 ]; then
-        log "ERROR" "Trojan-Go 下载失败"
-        return 1
-    fi
+   # 下载最新版本
+   local version=$(curl -fsSL ${GITHUB_API_URL} | grep tag_name | cut -d'"' -f4)
+   local arch="amd64"
+   local download_url="https://github.com/p4gefau1t/trojan-go/releases/download/${version}/trojan-go-linux-${arch}.zip"
+   
+   wget -O /tmp/trojan-go.zip ${download_url}
+   if [ $? -ne 0 ]; then
+       log "ERROR" "Trojan-Go 下载失败"
+       return 1
+   fi
 
-    # 解压安装
-    unzip -o /tmp/trojan-go.zip -d /tmp/trojan-go
-    mkdir -p /usr/local/bin/
-    cp /tmp/trojan-go/trojan-go /usr/local/bin/
-    chmod +x /usr/local/bin/trojan-go
+   # 解压安装
+   unzip -o /tmp/trojan-go.zip -d /tmp/trojan-go
+   mkdir -p /usr/local/bin/
+   cp /tmp/trojan-go/trojan-go /usr/local/bin/
+   chmod +x /usr/local/bin/trojan-go
 
-    # 保存配置
-    set_status PASSWORD ${password}
-    set_status PORT ${port}
-
-    # 配置 Trojan-Go
-    cat > /etc/trojan-go/config.json << EOF
+   # 配置 Trojan-Go
+   cat > /etc/trojan-go/config.json << EOF
 {
-    "run_type": "server",
-    "local_addr": "0.0.0.0",
-    "local_port": ${port},
-    "remote_addr": "127.0.0.1",
-    "remote_port": 80,
-    "password": [
-        "${password}"
-    ],
-    "ssl": {
-        "cert": "/etc/trojan-go/cert/${domain}.pem",
-        "key": "/etc/trojan-go/cert/${domain}.key",
-        "sni": "${domain}",
-        "alpn": [
-            "http/1.1"
-        ],
-        "session_ticket": true,
-        "reuse_session": true,
-        "fallback_addr": "127.0.0.1",
-        "fallback_port": 80
-    }
+   "run_type": "server",
+   "local_addr": "0.0.0.0",
+   "local_port": ${port},
+   "remote_addr": "127.0.0.1",
+   "remote_port": 80,
+   "password": [
+       "${password}"
+   ],
+   "ssl": {
+       "cert": "/etc/trojan-go/cert/${domain}.pem",
+       "key": "/etc/trojan-go/cert/${domain}.key",
+       "sni": "${domain}",
+       "alpn": [
+           "http/1.1"
+       ],
+       "session_ticket": true,
+       "reuse_session": true,
+       "fallback_addr": "127.0.0.1",
+       "fallback_port": 80
+   }
 }
 EOF
 
-    # 配置系统服务
-    cat > /etc/systemd/system/trojan-go.service << EOF
+   # 配置系统服务
+   cat > /etc/systemd/system/trojan-go.service << EOF
 [Unit]
 Description=Trojan-Go - An unidentifiable mechanism that helps you bypass GFW
 Documentation=https://p4gefau1t.github.io/trojan-go/
@@ -546,376 +546,407 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
 
-    # 重新加载系统服务并启动
-    systemctl daemon-reload
-    systemctl enable trojan-go
-    systemctl start trojan-go
+   # 更新 Nginx 配置为仅监听本地
+   cat > /etc/nginx/conf.d/default.conf << EOF
+server {
+   listen 127.0.0.1:80;
+   server_name _;
+   root /usr/share/nginx/html;
+   index index.html index.htm;
 
-    # 检查服务状态
-    if ! systemctl is-active --quiet trojan-go; then
-        log "ERROR" "Trojan-Go 启动失败"
-        return 1
-    fi
+   location / {
+       try_files \$uri \$uri/ =404;
+   }
 
-    # 清理临时文件
-    rm -rf /tmp/trojan-go /tmp/trojan-go.zip
+   # 禁止访问敏感文件
+   location ~ .*\.(git|zip|rar|sql|conf|env)$ {
+       deny all;
+   }
 
-    set_status TROJAN_INSTALLED 1
-    log "SUCCESS" "Trojan-Go 安装配置完成"
-    return 0
+   # 错误页面
+   error_page 404 /404.html;
+   error_page 500 502 503 504 /50x.html;
+   location = /50x.html {
+       root /usr/share/nginx/html;
+   }
+}
+EOF
+
+   # 重新加载系统服务并启动
+   systemctl daemon-reload
+   systemctl enable trojan-go
+   systemctl restart nginx
+   systemctl start trojan-go
+
+   # 检查服务状态
+   if ! systemctl is-active --quiet trojan-go; then
+       log "ERROR" "Trojan-Go 启动失败"
+       return 1
+   fi
+
+   # 清理临时文件
+   rm -rf /tmp/trojan-go /tmp/trojan-go.zip
+
+   # 保存配置
+   set_status PASSWORD ${password}
+   set_status PORT ${port}
+   set_status TROJAN_INSTALLED 1
+   
+   log "SUCCESS" "Trojan-Go 安装配置完成"
+   return 0
 }
 
 # 配置 UFW 防火墙
 configure_ufw() {
-    if ! check_reinstall "UFW防火墙" "UFW_CONFIGURED"; then
-        return 0
-    fi
+   if ! check_reinstall "UFW防火墙" "UFW_CONFIGURED"; then
+       return 0
+   fi
 
-    log "INFO" "配置 UFW 防火墙..."
+   log "INFO" "配置 UFW 防火墙..."
 
-    # 获取 Trojan-Go 端口
-    local port=$(get_status PORT)
-    if [ -z "$port" ]; then
-        port=443
-    fi
+   # 获取 Trojan-Go 端口
+   local port=$(get_status PORT)
+   if [ -z "$port" ]; then
+       port=443
+   fi
 
-    # 检查当前 SSH 端口
-    local current_ssh_port=$(ss -tulpn | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
-    
-    echo "重要提示：错误的防火墙配置可能导致 SSH 连接断开！"
-    echo "检测到当前 SSH 连接端口: ${current_ssh_port:-22}"
-    
-    # 询问 SSH 端口
-    local ssh_port
-    while true; do
-        read -p "请确认 SSH 端口 [默认 ${current_ssh_port:-22}]: " ssh_port
-        if [ -z "$ssh_port" ]; then
-            ssh_port=${current_ssh_port:-22}
-            break
-        elif [[ "$ssh_port" =~ ^[1-9][0-9]*$ ]] && [ "$ssh_port" -ge 1 ] && [ "$ssh_port" -le 65535 ]; then
-            break
-        else
-            log "ERROR" "请输入有效的端口号(1-65535)"
-        fi
-    done
+   # 检查当前 SSH 端口
+   local current_ssh_port=$(ss -tulpn | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
+   
+   echo "重要提示：错误的防火墙配置可能导致 SSH 连接断开！"
+   echo "检测到当前 SSH 连接端口: ${current_ssh_port:-22}"
+   
+   # 询问 SSH 端口
+   local ssh_port
+   while true; do
+       read -p "请确认 SSH 端口 [默认 ${current_ssh_port:-22}]: " ssh_port
+       if [ -z "$ssh_port" ]; then
+           ssh_port=${current_ssh_port:-22}
+           break
+       elif [[ "$ssh_port" =~ ^[1-9][0-9]*$ ]] && [ "$ssh_port" -ge 1 ] && [ "$ssh_port" -le 65535 ]; then
+           break
+       else
+           log "ERROR" "请输入有效的端口号(1-65535)"
+       fi
+   done
 
-    log "INFO" "将保持 SSH 端口 $ssh_port 开放"
-    
-    # 最后确认
-    echo "即将配置防火墙，将开放以下端口："
-    echo "1. SSH 端口: $ssh_port"
-    echo "2. Trojan-Go 端口: $port"
-    
-    read -p "确认开始配置防火墙？[y/N] " confirm
-    if [[ "${confirm,,}" != "y" ]]; then
-        log "INFO" "取消防火墙配置"
-        return 0
-    fi
+   log "INFO" "将保持 SSH 端口 $ssh_port 开放"
+   
+   # 最后确认
+   echo "即将配置防火墙，将开放以下端口："
+   echo "1. SSH 端口: $ssh_port"
+   echo "2. Trojan-Go 端口: $port"
+   
+   read -p "确认开始配置防火墙？[y/N] " confirm
+   if [[ "${confirm,,}" != "y" ]]; then
+       log "INFO" "取消防火墙配置"
+       return 0
+   fi
 
-    # 检查 UFW 是否安装
-    if ! command -v ufw >/dev/null; then
-        apt install -y ufw
-    fi
+   # 检查 UFW 是否安装
+   if ! command -v ufw >/dev/null; then
+       apt install -y ufw
+   fi
 
-    # 重置 UFW
-    log "INFO" "重置防火墙规则..."
-    ufw --force reset
+   # 重置 UFW
+   log "INFO" "重置防火墙规则..."
+   ufw --force reset
 
-    # 设置默认策略
-    ufw default deny incoming
-    ufw default allow outgoing
+   # 设置默认策略
+   ufw default deny incoming
+   ufw default allow outgoing
 
-    # 允许 SSH
-    log "INFO" "配置 SSH 端口 $ssh_port..."
-    ufw allow "$ssh_port"/tcp
+   # 允许 SSH
+   log "INFO" "配置 SSH 端口 $ssh_port..."
+   ufw allow "$ssh_port"/tcp
 
-    # 允许 Trojan-Go 端口
-    log "INFO" "配置 Trojan-Go 端口 $port..."
-    ufw allow "$port"/tcp
+   # 允许 Trojan-Go 端口
+   log "INFO" "配置 Trojan-Go 端口 $port..."
+   ufw allow "$port"/tcp
 
-    # 启用UFW
-    log "INFO" "启用防火墙..."
-    echo "y" | ufw enable
-    systemctl enable ufw
+   # 启用UFW
+   log "INFO" "启用防火墙..."
+   echo "y" | ufw enable
+   systemctl enable ufw
 
-    if [ $? -ne 0 ]; then
-        log "ERROR" "UFW 配置失败"
-        return 1
-    fi
+   if [ $? -ne 0 ]; then
+       log "ERROR" "UFW 配置失败"
+       return 1
+   fi
 
-    # 保存 SSH 端口配置
-    set_status SSH_PORT "$ssh_port"
+   # 保存 SSH 端口配置
+   set_status SSH_PORT "$ssh_port"
 
-    # 显示防火墙规则
-    echo ""
-    log "INFO" "当前防火墙规则："
-    ufw status verbose
+   # 显示防火墙规则
+   echo ""
+   log "INFO" "当前防火墙规则："
+   ufw status verbose
 
-    set_status UFW_CONFIGURED 1
-    log "SUCCESS" "UFW 防火墙配置完成"
-    
-    # 安全提示
-    if [ "$ssh_port" != "$current_ssh_port" ]; then
-        log "WARNING" "SSH 端口已更改！请确保新端口 $ssh_port 可以正常连接后再关闭旧连接"
-    fi
-    
-    return 0
+   set_status UFW_CONFIGURED 1
+   log "SUCCESS" "UFW 防火墙配置完成"
+   
+   # 安全提示
+   if [ "$ssh_port" != "$current_ssh_port" ]; then
+       log "WARNING" "SSH 端口已更改！请确保新端口 $ssh_port 可以正常连接后再关闭旧连接"
+   fi
+   
+   return 0
 }
 
 # 安装 BBR 加速
 install_bbr() {
-    if ! check_reinstall "BBR加速" "BBR_INSTALLED"; then
-        return 0
-    fi
+   if ! check_reinstall "BBR加速" "BBR_INSTALLED"; then
+       return 0
+   fi
 
-    log "INFO" "开始安装 BBR 加速..."
+   log "INFO" "检查 BBR 状态..."
 
-    # 检查是否已经启用
-    if lsmod | grep -q bbr; then
-        log "INFO" "BBR 已经启用"
-        set_status BBR_INSTALLED 1
-        return 0
-    fi
+   # 检查系统内核版本
+   local kernel_version=$(uname -r)
+   log "INFO" "当前内核版本: $kernel_version"
 
-    # 检查系统版本
-    if [[ "$(uname -r)" < "4.9" ]]; then
-        log "INFO" "正在安装新内核..."
-        apt update
-        apt install -y linux-image-generic
-        if [ $? -ne 0 ]; then
-            log "ERROR" "内核安装失败"
-            return 1
-        fi
-    fi
+   # 检查是否已经启用BBR
+   if lsmod | grep -q bbr; then
+       log "SUCCESS" "BBR 已经启用（Debian 12 默认）"
+       set_status BBR_INSTALLED 1
+       return 0
+   fi
 
-    # 启用 BBR
-    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-    fi
-    
-    if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-    fi
+   # 如果somehow BBR没有启用，那么启用它
+   log "INFO" "配置 BBR..."
 
-    sysctl -p
+   # 检查是否已经有配置
+   if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
+       echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+   fi
+   
+   if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
+       echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+   fi
 
-    # 加载 BBR 模块
-    modprobe tcp_bbr
+   # 应用配置
+   sysctl -p
 
-    # 验证 BBR 是否启用
-    if lsmod | grep -q bbr; then
-        set_status BBR_INSTALLED 1
-        log "SUCCESS" "BBR 加速安装完成"
-        log "INFO" "建议重启服务器使配置生效"
-        read -p "是否现在重启服务器？[y/N] " answer
-        if [[ "${answer,,}" == "y" ]]; then
-            reboot
-        fi
-        return 0
-    else
-        log "ERROR" "BBR 加速安装失败"
-        return 1
-    fi
+   # 验证是否启用
+   if lsmod | grep -q bbr; then
+       set_status BBR_INSTALLED 1
+       log "SUCCESS" "BBR 已成功启用"
+       return 0
+   else
+       log "ERROR" "BBR 启用失败，请检查系统配置"
+       return 1
+   fi
 }
 
 # 显示配置信息
 show_config() {
-    local domain=$(get_status DOMAIN)
-    local password=$(get_status PASSWORD)
-    local port=$(get_status PORT)
-    
-    echo "===================== Trojan-Go 配置信息 ====================="
-    echo -e "域名: ${GREEN}${domain}${PLAIN}"
-    echo -e "端口: ${GREEN}${port}${PLAIN}"
-    echo -e "密码: ${GREEN}${password}${PLAIN}"
-    echo ""
-    echo "客户端配置信息："
-    echo "  地址(address): ${domain}"
-    echo "  端口(port): ${port}"
-    echo "  密码(password): ${password}"
-    echo "  加密方式(security): tls"
-    echo "=========================================================="
+   local domain=$(get_status DOMAIN)
+   local password=$(get_status PASSWORD)
+   local port=$(get_status PORT)
+   
+   echo "===================== Trojan-Go 配置信息 ====================="
+   echo -e "域名: ${GREEN}${domain}${PLAIN}"
+   echo -e "端口: ${GREEN}${port}${PLAIN}"
+   echo -e "密码: ${GREEN}${password}${PLAIN}"
+   echo ""
+   echo "客户端配置信息："
+   echo "  地址(address): ${domain}"
+   echo "  端口(port): ${port}"
+   echo "  密码(password): ${password}"
+   echo "  加密方式(security): tls"
+   echo "=========================================================="
 }
 
 # 查看服务状态
 show_status() {
-    echo "===================== 服务运行状态 ====================="
-    echo -e "\n[ Nginx 状态 ]"
-    systemctl status nginx --no-pager | grep -E "Active:|running"
-    
-    echo -e "\n[ Trojan-Go 状态 ]"
-    systemctl status trojan-go --no-pager | grep -E "Active:|running"
-    
-    echo -e "\n[ UFW 状态 ]"
-    ufw status verbose
-    
-    echo -e "\n[ BBR 状态 ]"
-    if lsmod | grep -q bbr; then
-        echo -e "${GREEN}BBR: 已启用${PLAIN}"
-        sysctl net.ipv4.tcp_congestion_control
-    else
-        echo -e "${RED}BBR: 未启用${PLAIN}"
-    fi
-    
-    echo -e "\n[ 端口监听状态 ]"
-    ss -tulpn | grep -E ':80|:443'
-    echo "======================================================"
+   echo "===================== 服务运行状态 ====================="
+   echo -e "\n[ Nginx 状态 ]"
+   systemctl status nginx --no-pager | grep -E "Active:|running"
+   
+   echo -e "\n[ Trojan-Go 状态 ]"
+   systemctl status trojan-go --no-pager | grep -E "Active:|running"
+   
+   echo -e "\n[ UFW 状态 ]"
+   ufw status verbose
+   
+   echo -e "\n[ BBR 状态 ]"
+   if lsmod | grep -q bbr; then
+       echo -e "${GREEN}BBR: 已启用${PLAIN}"
+       sysctl net.ipv4.tcp_congestion_control
+   else
+       echo -e "${RED}BBR: 未启用${PLAIN}"
+   fi
+   
+   echo -e "\n[ 端口监听状态 ]"
+   ss -tulpn | grep -E ':80|:443'
+   echo "======================================================"
 }
 
 # 重启所有服务
 restart_services() {
-    log "INFO" "重启所有服务..."
-    
-    systemctl restart nginx
-    systemctl restart trojan-go
-    
-    # 验证服务状态
-    local has_error=0
-    
-    if ! systemctl is-active --quiet nginx; then
-        log "ERROR" "Nginx 重启失败"
-        has_error=1
-    fi
-    
-    if ! systemctl is-active --quiet trojan-go; then
-        log "ERROR" "Trojan-Go 重启失败"
-        has_error=1
-    fi
-    
-    if [ $has_error -eq 0 ]; then
-        log "SUCCESS" "所有服务重启成功"
-        show_status
-    fi
+   log "INFO" "重启所有服务..."
+   
+   systemctl restart nginx
+   systemctl restart trojan-go
+   
+   # 验证服务状态
+   local has_error=0
+   
+   if ! systemctl is-active --quiet nginx; then
+       log "ERROR" "Nginx 重启失败"
+       has_error=1
+   fi
+   
+   if ! systemctl is-active --quiet trojan-go; then
+       log "ERROR" "Trojan-Go 重启失败"
+       has_error=1
+   fi
+   
+   if [ $has_error -eq 0 ]; then
+       log "SUCCESS" "所有服务重启成功"
+       show_status
+   fi
 }
 
 # 卸载所有组件
 uninstall_all() {
-    log "WARNING" "即将卸载所有组件..."
-    echo -e "${RED}该操作将会：${PLAIN}"
-    echo "1. 停止并删除 Trojan-Go 服务"
-    echo "2. 停止并删除 Nginx 服务"
-    echo "3. 删除所有证书和配置文件"
-    echo "4. 重置防火墙配置"
-    echo "5. 删除 BBR 配置"
-    
-    read -p "确定要卸载所有组件吗？[y/N] " answer
-    if [[ "${answer,,}" != "y" ]]; then
-        return 0
-    fi
+   log "WARNING" "即将卸载所有组件..."
+   echo -e "${RED}该操作将会：${PLAIN}"
+   echo "1. 停止并删除 Trojan-Go 服务"
+   echo "2. 停止并删除 Nginx 服务"
+   echo "3. 删除所有证书和配置文件"
+   echo "4. 重置防火墙配置"
+   
+   read -p "确定要卸载所有组件吗？[y/N] " answer
+   if [[ "${answer,,}" != "y" ]]; then
+       return 0
+   fi
 
-    log "INFO" "开始卸载组件..."
+   log "INFO" "开始卸载组件..."
 
-    # 1. 停止和禁用服务
-    log "INFO" "停止服务..."
-    systemctl stop trojan-go
-    systemctl disable trojan-go
-    systemctl stop nginx
-    systemctl disable nginx
+   # 1. 停止和禁用服务
+   log "INFO" "停止服务..."
+   systemctl stop trojan-go
+   systemctl disable trojan-go
+   systemctl stop nginx
+   systemctl disable nginx
 
-    # 2. 卸载 Trojan-Go
-    log "INFO" "删除 Trojan-Go..."
-    rm -rf /etc/trojan-go
-    rm -f /usr/local/bin/trojan-go
-    rm -f /etc/systemd/system/trojan-go.service
+   # 2. 卸载 Trojan-Go
+   log "INFO" "删除 Trojan-Go..."
+   rm -rf /etc/trojan-go
+   rm -f /usr/local/bin/trojan-go
+   rm -f /etc/systemd/system/trojan-go.service
 
-    # 3. 卸载 Nginx
-    log "INFO" "删除 Nginx..."
-    apt remove --purge -y nginx nginx-common
-    rm -rf /etc/nginx
-    rm -rf /var/log/nginx
+   # 3. 卸载 Nginx
+   log "INFO" "删除 Nginx..."
+   apt remove --purge -y nginx nginx-common
+   rm -rf /etc/nginx
+   rm -rf /var/log/nginx
 
-    # 4. 清理证书
-    log "INFO" "清理证书..."
-    if [ -d ~/.acme.sh ]; then
-        ~/.acme.sh/acme.sh --uninstall
-        rm -rf ~/.acme.sh
-    fi
+   # 4. 清理证书
+   log "INFO" "清理证书..."
+   if [ -d ~/.acme.sh ]; then
+       ~/.acme.sh/acme.sh --uninstall
+       rm -rf ~/.acme.sh
+   fi
 
-    # 5. 重置防火墙
-    log "INFO" "重置防火墙..."
-    ufw --force reset
-    ufw disable
+   # 5. 重置防火墙
+   log "INFO" "重置防火墙..."
+   ufw --force reset
+   ufw disable
 
-    # 6. 重置 BBR
-    log "INFO" "重置 BBR 配置..."
-    sed -i '/net.core.default_qdisc=fq/d' /etc/sysctl.conf
-    sed -i '/net.ipv4.tcp_congestion_control=bbr/d' /etc/sysctl.conf
-    sysctl -p >/dev/null 2>&1
+   # 6. 删除状态文件
+   rm -f "$STATUS_FILE"
 
-    # 7. 删除状态文件
-    rm -f "$STATUS_FILE"
+   log "SUCCESS" "所有组件已卸载完成"
+   
+   read -p "是否需要重启服务器？[y/N] " reboot_answer
+   if [[ "${reboot_answer,,}" == "y" ]]; then
+       reboot
+   fi
+}
 
-    log "SUCCESS" "所有组件已卸载完成"
-    
-    read -p "是否需要重启服务器？[y/N] " reboot_answer
-    if [[ "${reboot_answer,,}" == "y" ]]; then
-        reboot
-    fi
+# 显示菜单
+show_menu() {
+   clear
+   echo "========== Trojan-Go 安装管理系统 =========="
+   echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo -e " 2. 安装配置 Nginx $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo -e " 3. 申请配置 SSL 证书 $(if [ "$(get_status CERT_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo -e " 4. 安装配置 Trojan-Go $(if [ "$(get_status TROJAN_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo -e " 5. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo -e " 6. 安装配置 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+   echo " 7. 查看配置信息"
+   echo " 8. 查看运行状态"
+   echo " 9. 重启所有服务"
+   echo " 10. 卸载所有组件"
+   echo " 0. 退出"
+   echo "==========================================="
 }
 
 # 主函数
 main() {
-    # 检查是否为root用户
-    if [[ $EUID -ne 0 ]]; then
-        echo -e "${RED}错误：请使用 root 用户运行此脚本${PLAIN}"
-        exit 1
-    fi
+   # 检查是否为root用户
+   if [[ $EUID -ne 0 ]]; then
+       echo -e "${RED}错误：请使用 root 用户运行此脚本${PLAIN}"
+       exit 1
+   fi
 
-    # 检查是否为 Debian 系统
-    if ! grep -qi "debian" /etc/os-release; then
-        echo -e "${RED}错误：此脚本仅支持 Debian 系统${PLAIN}"
-        exit 1
-    fi
+   # 检查是否为 Debian 系统
+   if ! grep -qi "debian" /etc/os-release; then
+       echo -e "${RED}错误：此脚本仅支持 Debian 系统${PLAIN}"
+       exit 1
+   fi
 
-    # 初始化
-    init_status_file
-    
-    # 主循环
-    while true; do
-        show_menu
-        read -p "请选择操作[0-10]: " choice
-        case "${choice}" in
-            0)
-                log "INFO" "退出脚本"
-                exit 0
-                ;;
-            1)
-                prepare_system
-                ;;
-            2)
-                install_nginx
-                ;;
-            3)
-                install_cert
-                ;;
-            4)
-                install_trojan
-                ;;
-            5)
-                configure_ufw
-                ;;
-            6)
-                install_bbr
-                ;;
-            7)
-                show_config
-                ;;
-            8)
-                show_status
-                ;;
-            9)
-                restart_services
-                ;;
-            10)
-                uninstall_all
-                ;;
-            *)
-                log "ERROR" "无效的选择"
-                ;;
-        esac
-        echo
-        read -p "按回车键继续..." </dev/tty
-    done
+   # 初始化
+   init_status_file
+   
+   # 主循环
+   while true; do
+       show_menu
+       read -p "请选择操作[0-10]: " choice
+       case "${choice}" in
+           0)
+               log "INFO" "退出脚本"
+               exit 0
+               ;;
+           1)
+               prepare_system
+               ;;
+           2)
+               install_nginx
+               ;;
+           3)
+               install_cert
+               ;;
+           4)
+               install_trojan
+               ;;
+           5)
+               configure_ufw
+               ;;
+           6)
+               install_bbr
+               ;;
+           7)
+               show_config
+               ;;
+           8)
+               show_status
+               ;;
+           9)
+               restart_services
+               ;;
+           10)
+               uninstall_all
+               ;;
+           *)
+               log "ERROR" "无效的选择"
+               ;;
+       esac
+       echo
+       read -p "按回车键继续..." </dev/tty
+   done
 }
 
 # 启动脚本
