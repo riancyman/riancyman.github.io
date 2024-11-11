@@ -102,6 +102,33 @@ show_menu() {
     echo "==========================================="
 }
 
+# 系统环境准备函数
+prepare_system() {
+    if ! check_reinstall "系统环境" "SYSTEM_PREPARED"; then
+        return 0
+    fi
+
+    log "INFO" "准备系统环境..."
+    
+    # 更新系统
+    apt update
+    if [ $? -ne 0 ]; then
+        log "ERROR" "系统更新失败"
+        return 1
+    fi
+
+    # 安装基础软件包
+    apt install -y curl wget unzip git ufw
+    if [ $? -ne 0 ]; then
+        log "ERROR" "基础软件包安装失败"
+        return 1
+    fi
+
+    set_status SYSTEM_PREPARED 1
+    log "SUCCESS" "系统环境准备完成"
+    return 0
+}
+
 
 # 安装 Nginx
 install_nginx() {
