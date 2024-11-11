@@ -496,39 +496,80 @@ install_trojan() {
    fi
 
    # 解压安装
-   unzip -o /tmp/trojan-go.zip -d /tmp/trojan-go
-   mkdir -p /usr/local/bin/
-   cp /tmp/trojan-go/trojan-go /usr/local/bin/
-   chmod +x /usr/local/bin/trojan-go
+    unzip -o /tmp/trojan-go.zip -d /tmp/trojan-go
+    mkdir -p /usr/local/bin/
+    mkdir -p /usr/local/share/trojan-go
+    
+    # 复制主程序
+    cp /tmp/trojan-go/trojan-go /usr/local/bin/
+    chmod +x /usr/local/bin/trojan-go
 
-   # 配置 Trojan-Go
-   cat > /etc/trojan-go/config.json << EOF
+    # 复制 GeoIP 数据文件
+    cp /tmp/trojan-go/geoip.dat /usr/local/share/trojan-go/
+    cp /tmp/trojan-go/geoip-only-cn-private.dat /usr/local/share/trojan-go/
+    cp /tmp/trojan-go/geosite.dat /usr/local/share/trojan-go/
+
+   # 修改 Trojan-Go 配置，添加 GeoIP 文件路径
+    cat > /etc/trojan-go/config.json << EOF
 {
-   "run_type": "server",
-   "local_addr": "0.0.0.0",
-   "local_port": ${port},
-   "remote_addr": "127.0.0.1",
-   "remote_port": 80,
-   "password": [
-       "${password}"
-   ],
-   "ssl": {
-       "cert": "/etc/trojan-go/cert/${domain}.pem",
-       "key": "/etc/trojan-go/cert/${domain}.key",
-       "sni": "${domain}",
-       "alpn": [
-           "http/1.1"
-       ],
-       "session_ticket": true,
-       "reuse_session": true,
-       "fallback_addr": "127.0.0.1",
-       "fallback_port": 80
-   }
+    "run_type": "server",
+    "local_addr": "0.0.0.0",
+    "local_port": ${port},
+    "remote_addr": "127.0.0.1",
+    "remote_port": 80,
+    "password": [
+        "${password}"
+    ],
+    "ssl": {
+        "cert": "/etc/trojan-go/cert/${domain}.pem",
+        "key": "/etc/trojan-go/cert/${domain}.key",
+        "sni": "${domain}",
+        "alpn": [
+            "http/1.1"
+        ],
+        "session_ticket": true,
+        "reuse_session": true,
+        "fallback_addr": "127.0.0.1",
+        "fallback_port": 80
+    },
+    "router": {
+        "enabled": true,
+        "bypass": [
+            "geoip:private",
+            "geoip:cn",
+            "geosite:cn",
+            "geosite:private"
+        ],
+        "block": [
+            "geosite:category-ads"
+        ],
+        "proxy": [
+            "geosite:geolocation-!cn"
+        ]
+    },
+    "tcp": {
+        "no_delay": true,
+        "keep_alive": true,
+        "reuse_port": true,
+        "prefer_ipv4": false
+    }
 }
 EOF
 
-   # 配置系统服务
-   cat > /etc/systemd/system/trojan-go.service << EOF
+    # 设置数据文件路径
+    mkdir -p /usr/local/share/trojan-go
+    ln -sf /usr/local/share/trojan-go/geoip.dat /etc/trojan-go/geoip.dat
+    ln -sf /usr/local/share/trojan-go/geoip-only-cn-private.dat /etc/trojan-go/geoip-only-cn-private.dat
+    ln -sf /usr/local/share/trojan-go/geosite.dat /etc/trojan-go/geosite.dat
+
+    # 创建日志目录
+    mkdir -p /var/log/trojan-go
+    touch /var/log/trojan-go/error.log
+    chmod 755 /var/log/trojan-go
+    chmod 644 /var/log/trojan-go/error.log
+
+   # 修改服务文件，添加日志配置
+    cat > /etc/systemd/system/trojan-go.service << EOF
 [Unit]
 Description=Trojan-Go - An unidentifiable mechanism that helps you bypass GFW
 Documentation=https://p4gefau1t.github.io/trojan-go/
@@ -541,6 +582,8 @@ ExecStart=/usr/local/bin/trojan-go -config /etc/trojan-go/config.json
 Restart=always
 RestartSec=10
 LimitNOFILE=65535
+StandardOutput=append:/var/log/trojan-go/error.log
+StandardError=append:/var/log/trojan-go/error.log
 
 [Install]
 WantedBy=multi-user.target
@@ -811,59 +854,62 @@ restart_services() {
 # 卸载所有组件
 uninstall_all() {
    log "WARNING" "即将卸载所有组件..."
-   echo -e "${RED}该操作将会：${PLAIN}"
-   echo "1. 停止并删除 Trojan-Go 服务"
-   echo "2. 停止并删除 Nginx 服务"
-   echo "3. 删除所有证书和配置文件"
-   echo "4. 重置防火墙配置"
-   
-   read -p "确定要卸载所有组件吗？[y/N] " answer
-   if [[ "${answer,,}" != "y" ]]; then
-       return 0
-   fi
+    echo -e "${RED}该操作将会：${PLAIN}"
+    echo "1. 停止并删除 Trojan-Go 服务"
+    echo "2. 停止并删除 Nginx 服务"
+    echo "3. 删除所有证书和配置文件"
+    echo "4. 删除所有日志文件"
+    echo "5. 重置防火墙配置"
+    
+    read -p "确定要卸载所有组件吗？[y/N] " answer
+    if [[ "${answer,,}" != "y" ]]; then
+        return 0
+    fi
 
-   log "INFO" "开始卸载组件..."
+    log "INFO" "开始卸载组件..."
 
-   # 1. 停止和禁用服务
-   log "INFO" "停止服务..."
-   systemctl stop trojan-go
-   systemctl disable trojan-go
-   systemctl stop nginx
-   systemctl disable nginx
+    # 1. 停止和禁用服务
+    log "INFO" "停止服务..."
+    systemctl stop trojan-go
+    systemctl disable trojan-go
+    systemctl stop nginx
+    systemctl disable nginx
 
-   # 2. 卸载 Trojan-Go
-   log "INFO" "删除 Trojan-Go..."
-   rm -rf /etc/trojan-go
-   rm -f /usr/local/bin/trojan-go
-   rm -f /etc/systemd/system/trojan-go.service
+    # 2. 卸载 Trojan-Go
+    log "INFO" "删除 Trojan-Go..."
+    rm -rf /etc/trojan-go
+    rm -f /usr/local/bin/trojan-go
+    rm -f /etc/systemd/system/trojan-go.service
+    rm -rf /usr/local/share/trojan-go
+    rm -rf /var/log/trojan-go    # 删除日志目录
 
-   # 3. 卸载 Nginx
-   log "INFO" "删除 Nginx..."
-   apt remove --purge -y nginx nginx-common
-   rm -rf /etc/nginx
-   rm -rf /var/log/nginx
+    # 3. 卸载 Nginx
+    log "INFO" "删除 Nginx..."
+    apt remove --purge -y nginx nginx-common
+    rm -rf /etc/nginx
+    rm -rf /var/log/nginx
 
-   # 4. 清理证书
-   log "INFO" "清理证书..."
-   if [ -d ~/.acme.sh ]; then
-       ~/.acme.sh/acme.sh --uninstall
-       rm -rf ~/.acme.sh
-   fi
+    # 4. 清理证书
+    log "INFO" "清理证书..."
+    if [ -d ~/.acme.sh ]; then
+        ~/.acme.sh/acme.sh --uninstall
+        rm -rf ~/.acme.sh
+    fi
 
-   # 5. 重置防火墙
-   log "INFO" "重置防火墙..."
-   ufw --force reset
-   ufw disable
+    # 5. 重置防火墙
+    log "INFO" "重置防火墙..."
+    ufw --force reset
+    ufw disable
 
-   # 6. 删除状态文件
-   rm -f "$STATUS_FILE"
+    # 6. 删除状态文件
+    rm -f "$STATUS_FILE"
 
-   log "SUCCESS" "所有组件已卸载完成"
-   
-   read -p "是否需要重启服务器？[y/N] " reboot_answer
-   if [[ "${reboot_answer,,}" == "y" ]]; then
-       reboot
-   fi
+    log "SUCCESS" "所有组件已卸载完成"
+    
+    read -p "是否需要重启服务器？[y/N] " reboot_answer
+    if [[ "${reboot_answer,,}" == "y" ]]; then
+        reboot
+    fi
 }
 
 # 显示菜单
