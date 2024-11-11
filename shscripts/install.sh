@@ -573,26 +573,68 @@ configure_ufw() {
 
     log "INFO" "配置 UFW 防火墙..."
 
+    # 获取 Trojan-Go 端口
+    local port=$(get_status PORT)
+    if [ -z "$port" ]; then
+        port=443
+    fi
+
+    # 检查当前 SSH 端口
+    local current_ssh_port=$(ss -tulpn | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
+    
+    echo "重要提示：错误的防火墙配置可能导致 SSH 连接断开！"
+    echo "检测到当前 SSH 连接端口: ${current_ssh_port:-22}"
+    
+    # 询问 SSH 端口
+    local ssh_port
+    while true; do
+        read -p "请确认 SSH 端口 [默认 ${current_ssh_port:-22}]: " ssh_port
+        if [ -z "$ssh_port" ]; then
+            ssh_port=${current_ssh_port:-22}
+            break
+        elif [[ "$ssh_port" =~ ^[1-9][0-9]*$ ]] && [ "$ssh_port" -ge 1 ] && [ "$ssh_port" -le 65535 ]; then
+            break
+        else
+            log "ERROR" "请输入有效的端口号(1-65535)"
+        fi
+    done
+
+    log "INFO" "将保持 SSH 端口 $ssh_port 开放"
+    
+    # 最后确认
+    echo "即将配置防火墙，将开放以下端口："
+    echo "1. SSH 端口: $ssh_port"
+    echo "2. Trojan-Go 端口: $port"
+    
+    read -p "确认开始配置防火墙？[y/N] " confirm
+    if [[ "${confirm,,}" != "y" ]]; then
+        log "INFO" "取消防火墙配置"
+        return 0
+    fi
+
     # 检查 UFW 是否安装
     if ! command -v ufw >/dev/null; then
         apt install -y ufw
     fi
 
     # 重置 UFW
+    log "INFO" "重置防火墙规则..."
     ufw --force reset
 
     # 设置默认策略
     ufw default deny incoming
     ufw default allow outgoing
 
-    # 允许SSH（默认22端口）
-    ufw allow ssh
+    # 允许 SSH
+    log "INFO" "配置 SSH 端口 $ssh_port..."
+    ufw allow "$ssh_port"/tcp
 
-    # 允许 HTTP 和 HTTPS
-    ufw allow http
-    ufw allow https
+    # 允许 Trojan-Go 端口
+    log "INFO" "配置 Trojan-Go 端口 $port..."
+    ufw allow "$port"/tcp
 
-    # 启用UFW并确保它开机自启
+    # 启用UFW
+    log "INFO" "启用防火墙..."
     echo "y" | ufw enable
     systemctl enable ufw
 
@@ -601,8 +643,22 @@ configure_ufw() {
         return 1
     fi
 
+    # 保存 SSH 端口配置
+    set_status SSH_PORT "$ssh_port"
+
+    # 显示防火墙规则
+    echo ""
+    log "INFO" "当前防火墙规则："
+    ufw status verbose
+
     set_status UFW_CONFIGURED 1
     log "SUCCESS" "UFW 防火墙配置完成"
+    
+    # 安全提示
+    if [ "$ssh_port" != "$current_ssh_port" ]; then
+        log "WARNING" "SSH 端口已更改！请确保新端口 $ssh_port 可以正常连接后再关闭旧连接"
+    fi
+    
     return 0
 }
 
