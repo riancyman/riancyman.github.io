@@ -296,7 +296,7 @@ install_trojan() {
     if [ -z "$domain" ]; then
         log "ERROR" "请先完成证书配置"
         return 1
-    }
+    fi
 
     log "INFO" "开始安装 Trojan-Go..."
 
