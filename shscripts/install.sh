@@ -389,7 +389,7 @@ EOF
 configure_ufw() {
     if ! check_reinstall "UFW防火墙" "UFW_CONFIGURED"; then
         return 0
-    }
+    fi
 
     log "INFO" "配置 UFW 防火墙..."
 
@@ -629,7 +629,7 @@ main() {
     if ! grep -qi "debian" /etc/os-release; then
         echo -e "${RED}错误：此脚本仅支持 Debian 系统${PLAIN}"
         exit 1
-    }
+    fi
 
     # 初始化
     init_status_file
