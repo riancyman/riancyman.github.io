@@ -154,48 +154,168 @@ install_nginx() {
         return 1
     fi
 
+    # 创建临时目录
+    mkdir -p /tmp/web
+
     # 伪装站点选择
-    echo "请选择伪装站点类型:"
-    echo "1. 博客"
-    echo "2. 影视站"
-    echo "3. 学术网站"
-    echo "4. 游戏网站"
-    echo "5. 自定义网站"
-    
-    read -p "请选择 [1-5]: " site_type
-    
-    case "$site_type" in
-        1)
-            wget -O web.zip https://github.com/wulabing/3DCEList/archive/master.zip
-            theme="3DCEList-master"
-            ;;
-        2)
-            wget -O web.zip https://github.com/wulabing/Meting-Theme/archive/master.zip
-            theme="Meting-Theme-master"
-            ;;
-        3)
-            wget -O web.zip https://github.com/wulabing/Academic-Website-Theme/archive/master.zip
-            theme="Academic-Website-Theme-master"
-            ;;
-        4)
-            wget -O web.zip https://github.com/wulabing/Gaming-Theme/archive/master.zip
-            theme="Gaming-Theme-master"
-            ;;
-        5)
-            read -p "请输入你的自定义网站URL（压缩包格式）: " custom_url
-            if [ -n "$custom_url" ]; then
-                wget -O web.zip "$custom_url"
-                theme="custom"
-            else
-                log "ERROR" "未提供有效的URL"
-                return 1
+echo "请选择伪装站点类型:"
+echo "1. 简单个人主页"
+echo "2. 技术博客"
+echo "3. 图片站"
+echo "4. 下载站"
+echo "5. 自定义网站"
+
+read -p "请选择 [1-5]: " site_type
+
+case "$site_type" in
+    1)
+        # 简单个人主页
+        cat > /usr/share/nginx/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>John Doe - Personal Page</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #333; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My Personal Page</h1>
+        <p>I am a software developer with a passion for technology and innovation.</p>
+        <h2>About Me</h2>
+        <p>With over 5 years of experience in web development, I specialize in creating efficient and elegant solutions.</p>
+        <h2>Contact</h2>
+        <p>Email: john.doe@example.com</p>
+    </div>
+</body>
+</html>
+EOF
+        ;;
+    2)
+        # 技术博客
+        cat > /usr/share/nginx/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tech Blog</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background: #f4f4f4; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 5px; }
+        .post { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee; }
+        h1 { color: #333; }
+        h2 { color: #444; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Latest in Technology</h1>
+        <div class="post">
+            <h2>Understanding Cloud Computing</h2>
+            <p>Cloud computing has revolutionized how we think about infrastructure...</p>
+        </div>
+        <div class="post">
+            <h2>The Future of AI</h2>
+            <p>Artificial Intelligence continues to evolve at a rapid pace...</p>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+        ;;
+    3)
+        # 图片站
+        cat > /usr/share/nginx/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Photography Portfolio</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #000; color: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .gallery-item { background: #333; padding: 10px; }
+        h1 { text-align: center; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Photography Portfolio</h1>
+        <div class="gallery">
+            <div class="gallery-item">Nature Photography</div>
+            <div class="gallery-item">Urban Photography</div>
+            <div class="gallery-item">Portrait Photography</div>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+        ;;
+    4)
+        # 下载站
+        cat > /usr/share/nginx/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Download Center</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .download-item { background: #f4f4f4; padding: 20px; margin-bottom: 20px; border-radius: 5px; }
+        h1 { color: #333; }
+        h2 { color: #444; }
+        .button { display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Download Center</h1>
+        <div class="download-item">
+            <h2>Software v1.0</h2>
+            <p>Latest version with new features and improvements</p>
+            <a href="#" class="button">Download</a>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+        ;;
+    5)
+        read -p "请输入你的自定义网站URL（html格式）: " custom_url
+        if [ -n "$custom_url" ]; then
+            curl -o /usr/share/nginx/html/index.html "$custom_url"
+            if [ $? -ne 0 ]; then
+                log "ERROR" "下载自定义网站失败，使用默认页面"
+                cat > /usr/share/nginx/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Welcome</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+    </style>
+</head>
+<body>
+    <h1>Welcome to our website!</h1>
+    <p>We're currently updating our content. Please check back soon.</p>
+</body>
+</html>
+EOF
             fi
-            ;;
-        *)
-            log "ERROR" "无效的选择"
-            return 1
-            ;;
-    esac
+        fi
+        ;;
+    *)
+        log "ERROR" "无效的选择，使用默认页面"
+        ;;
+esac
+
+    # 设置目录权限
+    chown -R nginx:nginx /usr/share/nginx/html
+    chmod -R 755 /usr/share/nginx/html
 
     # 解压并部署网站
     if [ -f web.zip ]; then
