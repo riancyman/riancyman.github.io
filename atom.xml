@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>叮当的老爷</title>
+  
+  <subtitle>个人博客 | 技术分享 | 学习笔记 | 生活随笔</subtitle>
+  <link href="https://riancyman.github.io/atom.xml" rel="self"/>
+  
+  <link href="https://riancyman.github.io/"/>
+  <updated>2024-11-11T00:26:49.916Z</updated>
+  <id>https://riancyman.github.io/</id>
+  
+  <author>
+    <name>riancy</name>
+    
+  </author>
+  
+  <generator uri="https://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>我的第一篇博客</title>
+    <link href="https://riancyman.github.io/2024/11/11/%E6%88%91%E7%9A%84%E7%AC%AC%E4%B8%80%E7%AF%87%E5%8D%9A%E5%AE%A2/"/>
+    <id>https://riancyman.github.io/2024/11/11/%E6%88%91%E7%9A%84%E7%AC%AC%E4%B8%80%E7%AF%87%E5%8D%9A%E5%AE%A2/</id>
+    <published>2024-11-10T16:00:00.000Z</published>
+    <updated>2024-11-11T00:26:49.916Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="写在前面"><a href="#写在前面" class="headerlink" title="写在前面"></a>写在前面</h2><p>从今天开始，我将在这里记录技术积累和人生感悟。</p><p>作为一名程序员，我会分享：</p><ul><li>前端开发经验（React、Vue等）</li><li>后端开发心得（Java、Node.js）</li><li>移动开发实践（Flutter）</li><li>各类开发工具使用技巧</li></ul><p>同时，我也会记录：</p><ul><li>工作中的故事</li><li>创业的经历</li><li>生活的感悟</li><li>退休后的日常</li></ul><p>期待与你相遇在这片天地。</p>]]></content>
+    
+    
+      
+      
+    <summary type="html">&lt;h2 id=&quot;写在前面&quot;&gt;&lt;a href=&quot;#写在前面&quot; class=&quot;headerlink&quot; title=&quot;写在前面&quot;&gt;&lt;/a&gt;写在前面&lt;/h2&gt;&lt;p&gt;从今天开始，我将在这里记录技术积累和人生感悟。&lt;/p&gt;
+&lt;p&gt;作为一名程序员，我会分享：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;前端开发</summary>
+      
+    
+    
+    
+    <category term="人生随笔" scheme="https://riancyman.github.io/categories/%E4%BA%BA%E7%94%9F%E9%9A%8F%E7%AC%94/"/>
+    
+    
+    <category term="自我介绍" scheme="https://riancyman.github.io/tags/%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D/"/>
+    
+    <category term="博客初衷" scheme="https://riancyman.github.io/tags/%E5%8D%9A%E5%AE%A2%E5%88%9D%E8%A1%B7/"/>
+    
+  </entry>
+  
+</feed>
