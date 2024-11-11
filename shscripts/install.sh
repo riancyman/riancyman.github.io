@@ -447,6 +447,39 @@ install_trojan() {
 
     log "INFO" "开始安装 Trojan-Go..."
 
+    # 配置端口
+    local port
+    while true; do
+        read -p "请输入 Trojan-Go 端口 [默认443]: " port
+        if [ -z "$port" ]; then
+            port=443
+            break
+        elif [[ "$port" =~ ^[1-9][0-9]*$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+            if check_port $port; then
+                break
+            else
+                log "ERROR" "端口 $port 已被占用，请选择其他端口"
+            fi
+        else
+            log "ERROR" "请输入1-65535之间的有效端口号"
+        fi
+    done
+
+    # 配置密码
+    local password
+    while true; do
+        read -p "请设置 Trojan-Go 密码 [留空则随机生成]: " password
+        if [ -z "$password" ]; then
+            password=$(openssl rand -base64 16)
+            log "INFO" "已生成随机密码: $password"
+            break
+        elif [[ "${#password}" -ge 6 ]]; then
+            break
+        else
+            log "ERROR" "密码长度必须大于等于6位"
+        fi
+    done
+
     # 下载最新版本
     local version=$(curl -fsSL ${GITHUB_API_URL} | grep tag_name | cut -d'"' -f4)
     local arch="amd64"
@@ -464,16 +497,16 @@ install_trojan() {
     cp /tmp/trojan-go/trojan-go /usr/local/bin/
     chmod +x /usr/local/bin/trojan-go
 
-    # 生成随机密码
-    local password=$(openssl rand -base64 16)
+    # 保存配置
     set_status PASSWORD ${password}
+    set_status PORT ${port}
 
     # 配置 Trojan-Go
     cat > /etc/trojan-go/config.json << EOF
 {
     "run_type": "server",
     "local_addr": "0.0.0.0",
-    "local_port": 443,
+    "local_port": ${port},
     "remote_addr": "127.0.0.1",
     "remote_port": 80,
     "password": [
@@ -633,8 +666,8 @@ install_bbr() {
 show_config() {
     local domain=$(get_status DOMAIN)
     local password=$(get_status PASSWORD)
-    local port=443
-
+    local port=$(get_status PORT)
+    
     echo "===================== Trojan-Go 配置信息 ====================="
     echo -e "域名: ${GREEN}${domain}${PLAIN}"
     echo -e "端口: ${GREEN}${port}${PLAIN}"
