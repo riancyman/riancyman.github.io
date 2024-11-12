@@ -892,6 +892,8 @@ show_menu() {
    echo " 8. 查看运行状态"
    echo " 9. 重启所有服务"
    echo " 10. 卸载所有组件"
+   echo " 11. 检查诊断信息"
+   echo " 12. 重置 Trojan-Go 配置"
    echo " 0. 退出"
    echo "==========================================="
 }
@@ -935,6 +937,63 @@ check_trojan_status() {
     tail -n 10 /var/log/trojan-go/error.log
     
     echo "=============================================="
+}
+
+reset_trojan() {
+    log "INFO" "开始重置 Trojan-Go 配置..."
+    
+    # 停止服务
+    systemctl stop trojan-go
+    systemctl stop nginx
+    
+    # 备份现有配置
+    if [ -f "/etc/trojan-go/config.json" ]; then
+        cp /etc/trojan-go/config.json /etc/trojan-go/config.json.bak
+    fi
+    
+    # 重新配置 Trojan-Go
+    local domain=$(get_status DOMAIN)
+    local password=$(get_status PASSWORD)
+    local port=$(get_status PORT)
+    
+    # 使用简化配置
+    cat > /etc/trojan-go/config.json << EOF
+{
+    "run_type": "server",
+    "local_addr": "0.0.0.0",
+    "local_port": ${port},
+    "remote_addr": "127.0.0.1",
+    "remote_port": 80,
+    "password": [
+        "${password}"
+    ],
+    "ssl": {
+        "cert": "/etc/trojan-go/cert/${domain}.pem",
+        "key": "/etc/trojan-go/cert/${domain}.key",
+        "sni": "${domain}"
+    }
+}
+EOF
+    
+    # 修改 Nginx 配置
+    cat > /etc/nginx/conf.d/default.conf << EOF
+server {
+    listen 127.0.0.1:80 default_server;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html index.htm;
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+    
+    # 重启服务
+    systemctl restart nginx
+    systemctl restart trojan-go
+    
+    # 检查状态
+    check_trojan_status
 }
 
 # 主函数
@@ -992,6 +1051,12 @@ main() {
                ;;
            10)
                uninstall_all
+               ;;
+           11)
+               check_trojan_status
+               ;;
+           12)
+               reset_trojan
                ;;
            *)
                log "ERROR" "无效的选择"
