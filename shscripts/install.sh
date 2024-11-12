@@ -916,7 +916,6 @@ show_menu() {
    echo " 9. 重启所有服务"
    echo " 10. 卸载所有组件"
    echo " 11. 检查诊断信息"
-   echo " 12. 重置 Trojan-Go 配置"
    echo " 0. 退出"
    echo "==========================================="
 }
@@ -936,13 +935,22 @@ check_trojan_status() {
     
     # 检查端口占用
     echo -e "\n2. 检查端口监听："
-    ss -tulpn | grep -E ':80|:443'
+    ss -tulpn | grep -E ':80|:443|:6893'
     
     # 检查 Trojan-Go 配置
     echo -e "\n3. Trojan-Go 配置检查："
     if [ -f "/etc/trojan-go/config.json" ]; then
         echo "   配置文件存在"
-        jq . /etc/trojan-go/config.json 2>/dev/null || echo "   配置文件格式错误"
+        # 使用 python 来格式化检查 JSON
+        if command -v python3 >/dev/null 2>&1; then
+            if python3 -c "import json; json.load(open('/etc/trojan-go/config.json'))" 2>/dev/null; then
+                echo "   配置文件格式正确"
+            else
+                echo "   配置文件格式错误"
+            fi
+        else
+            echo "   未安装 python3，无法验证 JSON 格式"
+        fi
     else
         echo "   配置文件不存在"
     fi
@@ -953,100 +961,21 @@ check_trojan_status() {
     
     # 检查防火墙
     echo -e "\n5. 防火墙状态："
-    ufw status | grep -E "443|80"
+    if command -v ufw >/dev/null 2>&1; then
+        ufw status verbose
+    else
+        echo "   UFW 未安装"
+    fi
     
     # 检查日志
     echo -e "\n6. 最近的错误日志："
-    tail -n 10 /var/log/trojan-go/error.log
-    
-    echo "=============================================="
-}
-
-reset_trojan() {
-    log "INFO" "开始重置 Trojan-Go 配置..."
-    
-    # 停止服务
-    systemctl stop trojan-go
-    systemctl stop nginx
-    
-    # 备份现有配置
-    if [ -f "/etc/trojan-go/config.json" ]; then
-        cp /etc/trojan-go/config.json /etc/trojan-go/config.json.bak
+    if [ -f "/var/log/trojan-go/error.log" ]; then
+        tail -n 10 /var/log/trojan-go/error.log
+    else
+        echo "   日志文件不存在"
     fi
     
-    # 重新配置 Trojan-Go
-    local domain=$(get_status DOMAIN)
-    local password=$(get_status PASSWORD)
-    local port=$(get_status PORT)
-    
-    # 使用简化配置
-    cat > /etc/trojan-go/config.json << EOF
-{
-    "run_type": "server",
-    "local_addr": "0.0.0.0",
-    "local_port": ${port},
-    "remote_addr": "127.0.0.1",
-    "remote_port": 80,
-    "password": [
-        "${password}"
-    ],
-    "ssl": {
-        "cert": "/etc/trojan-go/cert/${domain}.pem",
-        "key": "/etc/trojan-go/cert/${domain}.key",
-        "sni": "${domain}",
-        "alpn": [
-            "http/1.1"
-        ],
-        "fallback_port": 80,
-        "fallback_addr": "127.0.0.1"
-    },
-    "websocket": {
-        "enabled": true,
-        "path": "/ws",
-        "hostname": "${domain}"
-    },
-    "tcp": {
-        "no_delay": true,
-        "keep_alive": true,
-        "reuse_port": true
-    },
-    "transport_plugin": {
-        "enabled": false
-    }
-}
-EOF
-    
-    # 修改 Nginx 配置
-    cat > /etc/nginx/conf.d/default.conf << EOF
-server {
-    listen 127.0.0.1:80 default_server;
-    server_name _;
-    
-    root /usr/share/nginx/html;
-    index index.html index.htm;
-
-    # WebSocket 支持
-    location /ws {
-        proxy_redirect off;
-        proxy_pass http://127.0.0.1:80;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-    }
-
-    location / {
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
-    
-    # 重启服务
-    systemctl restart nginx
-    systemctl restart trojan-go
-    
-    # 检查状态
-    check_trojan_status
+    echo "=============================================="
 }
 
 # 主函数
@@ -1069,7 +998,7 @@ main() {
    # 主循环
    while true; do
        show_menu
-       read -p "请选择操作[0-10]: " choice
+       read -p "请选择操作[0-11]: " choice
        case "${choice}" in
            0)
                log "INFO" "退出脚本"
@@ -1107,9 +1036,6 @@ main() {
                ;;
            11)
                check_trojan_status
-               ;;
-           12)
-               reset_trojan
                ;;
            *)
                log "ERROR" "无效的选择"
