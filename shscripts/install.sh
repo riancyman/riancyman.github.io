@@ -16,6 +16,27 @@ GITHUB_API_URL="https://api.github.com/repos/p4gefau1t/trojan-go/releases/latest
 NGINX_KEY_URL="https://nginx.org/keys/nginx_signing.key"
 ACME_INSTALL_URL="https://get.acme.sh"
 
+# 安装依赖
+install_dependencies() {
+    # 检查并安装 python3
+    if ! command -v python3 >/dev/null 2>&1; then
+        log "INFO" "正在安装 python3..."
+        apt update
+        apt install -y python3
+    else
+        log "INFO" "python3 已安装"
+    fi
+
+    # 检查并安装 ufw
+    if ! command -v ufw >/dev/null 2>&1; then
+        log "INFO" "正在安装 ufw..."
+        apt update
+        apt install -y ufw
+    else
+        log "INFO" "ufw 已安装"
+    fi
+}
+
 # 检查端口是否被占用
 check_port() {
     local port=$1
@@ -923,6 +944,9 @@ show_menu() {
 check_trojan_status() {
     echo "=================== 诊断信息 ==================="
     
+    # 获取实际配置的端口
+    local trojan_port=$(get_status PORT)
+    
     # 检查证书
     echo "1. 检查证书："
     local domain=$(get_status DOMAIN)
@@ -935,7 +959,12 @@ check_trojan_status() {
     
     # 检查端口占用
     echo -e "\n2. 检查端口监听："
-    ss -tulpn | grep -E ':80|:443|:6893'
+    if [ -n "$trojan_port" ]; then
+        ss -tulpn | grep -E ":80|:443|:${trojan_port}"
+    else
+        ss -tulpn | grep -E ":80|:443"
+        echo "   警告: 未找到 Trojan-Go 端口配置"
+    fi
     
     # 检查 Trojan-Go 配置
     echo -e "\n3. Trojan-Go 配置检查："
