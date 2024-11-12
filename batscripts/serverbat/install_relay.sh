@@ -92,13 +92,14 @@ prepare_system() {
 install_haproxy() {
     log "INFO" "开始安装 HAProxy..."
     
-    # 添加 HAProxy 官方源
-    apt install -y --no-install-recommends software-properties-common
-    add-apt-repository ppa:vbernat/haproxy-2.8 -y
-    apt update
+    # 添加HAProxy官方源
+    curl -fsSL https://haproxy.debian.net/bernat.debian.org.gpg | gpg --dearmor -o /usr/share/keyrings/haproxy.debian.net.gpg
     
-    # 安装 HAProxy
-    apt install -y haproxy
+    echo "deb [signed-by=/usr/share/keyrings/haproxy.debian.net.gpg] http://haproxy.debian.net bookworm-backports-2.8 main" > /etc/apt/sources.list.d/haproxy.list
+    
+    # 更新源并安装HAProxy
+    apt update
+    apt install -y haproxy=2.8.\*
     
     # 创建HAProxy配置目录
     mkdir -p /etc/haproxy/certs
@@ -133,16 +134,20 @@ listen stats
     stats realm Haproxy\ Statistics
     stats auth admin:admin123
     stats refresh 10s
-
 EOF
     
     # 启动HAProxy
     systemctl enable haproxy
     systemctl restart haproxy
     
-    set_status HAPROXY_INSTALLED 1
-    log "SUCCESS" "HAProxy 安装完成"
-    return 0
+    if systemctl is-active --quiet haproxy; then
+        set_status HAPROXY_INSTALLED 1
+        log "SUCCESS" "HAProxy 安装完成"
+        return 0
+    else
+        log "ERROR" "HAProxy 启动失败，请检查配置"
+        return 1
+    fi
 }
 
 # 配置多端口转发
