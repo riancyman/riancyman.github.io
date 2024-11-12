@@ -64,47 +64,67 @@ set_status() {
     fi
 }
 
-# 检查端口是否被占用
-check_port() {
-    local port=$1
-    if ss -tuln | grep -q ":${port} "; then
-        return 1
+# 检查安装结果
+check_install_success() {
+    local service=$1
+    local status=$2
+    
+    if [ "$status" -eq 0 ]; then
+        return 0
     fi
-    return 0
+    return 1
 }
 
 # 系统环境准备
 prepare_system() {
     log "INFO" "准备系统环境..."
     
-    # 更新系统
-    apt update && apt upgrade -y
+    # 预先配置 kexec-tools
+    echo 'LOAD_KEXEC=false' > /etc/default/kexec
     
-    # 安装基础软件包
-    apt install -y curl wget unzip ufw socat
+    # 设置非交互模式
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # 更新系统和安装基础包
+    apt-get update
+    apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        curl wget unzip ufw socat
 
-    set_status SYSTEM_PREPARED 1
-    log "SUCCESS" "系统环境准备完成"
-    return 0
+    local status=$?
+    if check_install_success "系统环境" $status; then
+        set_status SYSTEM_PREPARED 1
+        log "SUCCESS" "系统环境准备完成"
+        return 0
+    else
+        log "ERROR" "系统环境准备失败"
+        return 1
+    fi
 }
 
 # 安装 HAProxy
 install_haproxy() {
     log "INFO" "开始安装 HAProxy..."
     
-    # 添加HAProxy官方源
-    curl -fsSL https://haproxy.debian.net/bernat.debian.org.gpg | gpg --dearmor -o /usr/share/keyrings/haproxy.debian.net.gpg
+    # 安装HAProxy
+    apt-get update
+    apt-get install -y haproxy
+
+    # 如果安装失败，尝试使用官方源
+    if [ $? -ne 0 ]; then
+        curl -fsSL https://haproxy.debian.net/bernat.debian.org.gpg | gpg --dearmor -o /usr/share/keyrings/haproxy.debian.net.gpg
+        echo "deb [signed-by=/usr/share/keyrings/haproxy.debian.net.gpg] http://haproxy.debian.net bookworm-backports-2.8 main" > /etc/apt/sources.list.d/haproxy.list
+        apt-get update
+        apt-get install -y haproxy=2.8.\*
+    fi
+
+    local status=$?
+    if [ $status -ne 0 ]; then
+        log "ERROR" "HAProxy 安装失败"
+        return 1
+    fi
     
-    echo "deb [signed-by=/usr/share/keyrings/haproxy.debian.net.gpg] http://haproxy.debian.net bookworm-backports-2.8 main" > /etc/apt/sources.list.d/haproxy.list
-    
-    # 更新源并安装HAProxy
-    apt update
-    apt install -y haproxy=2.8.\*
-    
-    # 创建HAProxy配置目录
-    mkdir -p /etc/haproxy/certs
-    
-    # 基础配置
+    # 创建基础配置
     cat > /etc/haproxy/haproxy.cfg << 'EOF'
 global
     log /dev/log local0
@@ -135,112 +155,129 @@ listen stats
     stats auth admin:admin123
     stats refresh 10s
 EOF
+
+    # 设置权限
+    chown -R haproxy:haproxy /etc/haproxy
     
-    # 启动HAProxy
+    # 启动服务
     systemctl enable haproxy
     systemctl restart haproxy
-    
+
+    # 验证服务状态
     if systemctl is-active --quiet haproxy; then
         set_status HAPROXY_INSTALLED 1
         log "SUCCESS" "HAProxy 安装完成"
         return 0
     else
-        log "ERROR" "HAProxy 启动失败，请检查配置"
+        log "ERROR" "HAProxy 启动失败"
         return 1
     fi
 }
 
-# 配置多端口转发
+# 配置端口转发
 configure_relay() {
     log "INFO" "配置端口转发..."
     
-    # 临时存储配置
-    local config_content=""
+    # 询问上游服务器信息
+    read -p "请输入上游服务器数量: " server_count
+    
+    # 准备配置文件
+    cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
+    
+    # 保留全局配置和默认配置
+    sed -i '/^frontend/,$d' /etc/haproxy/haproxy.cfg
+    
     local upstream_servers=""
     local listen_ports=""
     
-    # 询问上游服务器数量
-    read -p "请输入上游服务器数量: " server_count
-    
     for ((i=1; i<=server_count; i++)); do
-        # 获取上游服务器信息
         read -p "请输入第${i}个上游服务器域名或IP: " server_addr
         read -p "请输入第${i}个上游服务器端口: " server_port
-        read -p "请输入本地监听端口: " listen_port
+        read -p "请输入本地监听端口 [建议使用8443等]: " listen_port
         
-        # 检查端口是否被占用
-        if ! check_port $listen_port; then
-            log "ERROR" "端口 ${listen_port} 已被占用"
-            continue
-        fi
-        
-        # 生成配置
-        config_content="${config_content}
-# 第${i}个转发配置
+        # 添加转发配置
+        cat >> /etc/haproxy/haproxy.cfg << EOF
+
 frontend ft_${listen_port}
     bind *:${listen_port}
+    mode tcp
     default_backend bk_${server_addr}_${server_port}
 
 backend bk_${server_addr}_${server_port}
-    server server1 ${server_addr}:${server_port} check
-"
+    mode tcp
+    server server1 ${server_addr}:${server_port} check inter 2000 rise 2 fall 3
+EOF
         
-        # 记录配置信息
         upstream_servers="${upstream_servers}${server_addr}:${server_port},"
         listen_ports="${listen_ports}${listen_port},"
     done
     
-    # 更新HAProxy配置
-    echo "${config_content}" >> /etc/haproxy/haproxy.cfg
+    # 检查配置语法
+    if ! haproxy -c -f /etc/haproxy/haproxy.cfg; then
+        log "ERROR" "配置文件有误，正在回滚..."
+        mv /etc/haproxy/haproxy.cfg.bak /etc/haproxy/haproxy.cfg
+        return 1
+    fi
     
-    # 保存配置信息
-    set_status UPSTREAM_SERVERS "${upstream_servers%,}"
-    set_status LISTEN_PORTS "${listen_ports%,}"
-    
-    # 重启HAProxy
+    # 重启服务
     systemctl restart haproxy
     
-    set_status MULTI_PORT_CONFIGURED 1
-    log "SUCCESS" "端口转发配置完成"
-    return 0
+    if systemctl is-active --quiet haproxy; then
+        set_status UPSTREAM_SERVERS "${upstream_servers%,}"
+        set_status LISTEN_PORTS "${listen_ports%,}"
+        set_status MULTI_PORT_CONFIGURED 1
+        log "SUCCESS" "端口转发配置完成"
+        return 0
+    else
+        log "ERROR" "HAProxy 重启失败"
+        return 1
+    fi
 }
 
 # 配置 UFW 防火墙
 configure_ufw() {
     log "INFO" "配置 UFW 防火墙..."
+
+    # 检查SSH端口
+    local ssh_port=$(ss -tuln | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
+    ssh_port=${ssh_port:-22}
     
-    # 获取已配置的端口
-    local listen_ports=$(get_status LISTEN_PORTS)
-    local ssh_port=$(ss -tulpn | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
-    
-    # 重置 UFW
+    # 重置UFW
     ufw --force reset
+    
+    # 设置默认策略
     ufw default deny incoming
     ufw default allow outgoing
     
-    # 允许 SSH 端口
+    # 允许SSH
     ufw allow ${ssh_port}/tcp
     
-    # 允许所有配置的监听端口
+    # 允许HAProxy端口
+    local listen_ports=$(get_status LISTEN_PORTS)
     IFS=',' read -ra PORTS <<< "$listen_ports"
     for port in "${PORTS[@]}"; do
         ufw allow ${port}/tcp
     done
     
-    # 允许状态页面端口
+    # 允许状态监控端口
     ufw allow 10086/tcp
     
-    # 启用 UFW
+    # 启用UFW
     echo "y" | ufw enable
     
-    set_status UFW_CONFIGURED 1
-    log "SUCCESS" "UFW 防火墙配置完成"
-    return 0
+    if ufw status | grep -q "Status: active"; then
+        set_status UFW_CONFIGURED 1
+        log "SUCCESS" "UFW 防火墙配置完成"
+        return 0
+    else
+        log "ERROR" "UFW 配置失败"
+        return 1
+    fi
 }
 
 # 安装 BBR 加速
 install_bbr() {
-    log "INFO" "检查 BBR 状态..."
+    log "INFO" "配置 BBR..."
     
     if lsmod | grep -q bbr; then
         log "SUCCESS" "BBR 已经启用"
@@ -248,48 +285,50 @@ install_bbr() {
         return 0
     fi
     
-    # 配置BBR
     echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
     echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
     sysctl -p
     
     if lsmod | grep -q bbr; then
         set_status BBR_INSTALLED 1
-        log "SUCCESS" "BBR 安装成功"
+        log "SUCCESS" "BBR 配置完成"
         return 0
     else
-        log "ERROR" "BBR 安装失败"
+        log "ERROR" "BBR 配置失败"
         return 1
     fi
 }
 
-# 查看配置信息
+# 显示配置信息
 show_config() {
+    echo "====================== 转发配置信息 ======================"
+    
     local upstream_servers=$(get_status UPSTREAM_SERVERS)
     local listen_ports=$(get_status LISTEN_PORTS)
     
-    echo "=================== 转发配置信息 ==================="
-    echo "已配置的转发规则："
+    if [ -n "$upstream_servers" ] && [ -n "$listen_ports" ]; then
+        IFS=',' read -ra SERVERS <<< "$upstream_servers"
+        IFS=',' read -ra PORTS <<< "$listen_ports"
+        
+        for i in "${!SERVERS[@]}"; do
+            echo -e "转发规则 $((i+1)):"
+            echo -e "  本地端口: ${GREEN}${PORTS[i]}${PLAIN}"
+            echo -e "  上游服务器: ${GREEN}${SERVERS[i]}${PLAIN}"
+        done
+    else
+        echo "未找到转发配置"
+    fi
     
-    IFS=',' read -ra SERVERS <<< "$upstream_servers"
-    IFS=',' read -ra PORTS <<< "$listen_ports"
-    
-    for i in "${!SERVERS[@]}"; do
-        echo "规则 $((i+1)):"
-        echo "  监听端口: ${PORTS[i]}"
-        echo "  上游服务器: ${SERVERS[i]}"
-    done
-    
-    echo "HAProxy 状态页面："
-    echo "  地址: http://服务器IP:10086"
-    echo "  用户名: admin"
-    echo "  密码: admin123"
-    echo "================================================="
+    echo -e "\nHAProxy 状态页面："
+    echo -e "  地址: http://服务器IP:10086"
+    echo -e "  用户名: admin"
+    echo -e "  密码: admin123"
+    echo "======================================================="
 }
 
-# 查看服务状态
+# 显示状态
 show_status() {
-    echo "=================== 服务运行状态 ==================="
+    echo "====================== 服务运行状态 ======================"
     
     echo -e "\n[ HAProxy 状态 ]"
     systemctl status haproxy --no-pager | grep -E "Active:|running"
@@ -305,18 +344,19 @@ show_status() {
     fi
     
     echo -e "\n[ 端口监听状态 ]"
-    ss -tulpn | grep 'haproxy'
-    echo "================================================="
+    ss -tuln | grep -E ":(10086|${listen_ports// /|})"
+    echo "======================================================="
 }
 
 # 重启服务
 restart_services() {
-    log "INFO" "重启所有服务..."
+    log "INFO" "重启服务..."
     
     systemctl restart haproxy
     
     if systemctl is-active --quiet haproxy; then
         log "SUCCESS" "服务重启成功"
+        show_status
     else
         log "ERROR" "服务重启失败"
     fi
@@ -336,8 +376,22 @@ uninstall_all() {
     rm -rf /etc/haproxy
     rm -rf $INSTALL_STATUS_DIR
     ufw --force reset
+    ufw disable
     
     log "SUCCESS" "卸载完成"
+}
+
+# 检查是否需要重新安装
+check_reinstall() {
+    local component=$1
+    local status_key=$2
+    if [ "$(get_status $status_key)" = "1" ]; then
+        read -p "${component}已安装，是否重新安装？[y/N] " answer
+        if [[ "${answer,,}" != "y" ]]; then
+            return 1
+        fi
+    fi
+    return 0
 }
 
 # 显示菜单
@@ -379,17 +433,39 @@ main() {
         show_menu
         read -p "请选择操作[0-9]: " choice
         case "${choice}" in
-            0) exit 0 ;;
-            1) prepare_system ;;
-            2) install_haproxy ;;
-            3) configure_relay ;;
-            4) configure_ufw ;;
-            5) install_bbr ;;
-            6) show_config ;;
-            7) show_status ;;
-            8) restart_services ;;
-            9) uninstall_all ;;
-            *) log "ERROR" "无效的选择" ;;
+            0) 
+                exit 0 
+                ;;
+            1) 
+                check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system
+                ;;
+            2)
+                check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy
+                ;;
+            3)
+                check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay
+                ;;
+            4)
+                check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw
+                ;;
+            5)
+                check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr
+                ;;
+            6)
+                show_config
+                ;;
+            7)
+                show_status
+                ;;
+            8)
+                restart_services
+                ;;
+            9)
+                uninstall_all
+                ;;
+            *)
+                log "ERROR" "无效的选择"
+                ;;
         esac
         echo
         read -p "按回车键继续..." </dev/tty
