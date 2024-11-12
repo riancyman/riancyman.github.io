@@ -527,7 +527,21 @@ install_trojan() {
         "alpn": [
             "http/1.1"
         ],
-        "fallback_port": 80
+        "fallback_port": 80,
+        "fallback_addr": "127.0.0.1"
+    },
+    "websocket": {
+        "enabled": true,
+        "path": "/ws",
+        "hostname": "${domain}"
+    },
+    "tcp": {
+        "no_delay": true,
+        "keep_alive": true,
+        "reuse_port": true
+    },
+    "transport_plugin": {
+        "enabled": false
     }
 }
 EOF
@@ -569,11 +583,20 @@ EOF
    cat > /etc/nginx/conf.d/default.conf << EOF
 server {
     listen 127.0.0.1:80 default_server;
-    listen [::1]:80 default_server;
     server_name _;
     
     root /usr/share/nginx/html;
     index index.html index.htm;
+
+    # WebSocket 支持
+    location /ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:80;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
 
     location / {
         try_files \$uri \$uri/ =404;
@@ -970,7 +993,25 @@ reset_trojan() {
     "ssl": {
         "cert": "/etc/trojan-go/cert/${domain}.pem",
         "key": "/etc/trojan-go/cert/${domain}.key",
-        "sni": "${domain}"
+        "sni": "${domain}",
+        "alpn": [
+            "http/1.1"
+        ],
+        "fallback_port": 80,
+        "fallback_addr": "127.0.0.1"
+    },
+    "websocket": {
+        "enabled": true,
+        "path": "/ws",
+        "hostname": "${domain}"
+    },
+    "tcp": {
+        "no_delay": true,
+        "keep_alive": true,
+        "reuse_port": true
+    },
+    "transport_plugin": {
+        "enabled": false
     }
 }
 EOF
@@ -980,8 +1021,20 @@ EOF
 server {
     listen 127.0.0.1:80 default_server;
     server_name _;
+    
     root /usr/share/nginx/html;
     index index.html index.htm;
+
+    # WebSocket 支持
+    location /ws {
+        proxy_redirect off;
+        proxy_pass http://127.0.0.1:80;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+
     location / {
         try_files \$uri \$uri/ =404;
     }
