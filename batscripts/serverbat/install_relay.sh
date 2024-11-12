@@ -38,6 +38,8 @@ UFW_CONFIGURED=0
 BBR_INSTALLED=0
 UPSTREAM_SERVERS=""
 LISTEN_PORTS=""
+STATS_USER=""
+STATS_PASS=""
 EOF
     fi
     chmod 600 "$STATUS_FILE"
@@ -178,15 +180,73 @@ EOF
 configure_relay() {
     log "INFO" "配置端口转发..."
     
+    # 配置状态页面认证
+    local stats_user
+    local stats_pass
+    while true; do
+        read -p "请设置状态页面用户名 [默认随机生成]: " stats_user
+        if [ -z "$stats_user" ]; then
+            stats_user=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 8 | head -n 1)
+            log "INFO" "已生成随机用户名: $stats_user"
+            break
+        elif [[ "${#stats_user}" -ge 3 ]]; then
+            break
+        else
+            log "ERROR" "用户名长度必须大于等于3位"
+        fi
+    done
+
+    while true; do
+        read -p "请设置状态页面密码 [默认随机生成]: " stats_pass
+        if [ -z "$stats_pass" ]; then
+            stats_pass=$(tr -dc 'a-zA-Z0-9!@#$%^&*()' < /dev/urandom | fold -w 16 | head -n 1)
+            log "INFO" "已生成随机密码: $stats_pass"
+            break
+        elif [[ "${#stats_pass}" -ge 6 ]]; then
+            break
+        else
+            log "ERROR" "密码长度必须大于等于6位"
+        fi
+    done
+    
     # 询问上游服务器信息
     read -p "请输入上游服务器数量: " server_count
     
     # 准备配置文件
     cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.bak
     
-    # 保留全局配置和默认配置
-    sed -i '/^frontend/,$d' /etc/haproxy/haproxy.cfg
-    
+    # 创建基础配置
+    cat > /etc/haproxy/haproxy.cfg << EOF
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log     global
+    mode    tcp
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+
+# 状态页面
+listen stats
+    bind *:10086
+    mode http
+    stats enable
+    stats hide-version
+    stats uri /
+    stats realm Haproxy\ Statistics
+    stats auth ${stats_user}:${stats_pass}
+    stats refresh 10s
+EOF
+
     local upstream_servers=""
     local listen_ports=""
     
@@ -211,6 +271,10 @@ EOF
         upstream_servers="${upstream_servers}${server_addr}:${server_port},"
         listen_ports="${listen_ports}${listen_port},"
     done
+
+    # 保存认证信息到状态文件
+    set_status STATS_USER "${stats_user}"
+    set_status STATS_PASS "${stats_pass}"
     
     # 检查配置语法
     if ! haproxy -c -f /etc/haproxy/haproxy.cfg; then
@@ -223,9 +287,23 @@ EOF
     systemctl restart haproxy
     
     if systemctl is-active --quiet haproxy; then
-        set_status UPSTREAM_SERVERS "${upstream_servers%,}"
-        set_status LISTEN_PORTS "${listen_ports%,}"
-        set_status MULTI_PORT_CONFIGURED 1
+        # 添加调试日志
+        log "INFO" "保存配置信息："
+        log "INFO" "上游服务器: ${upstream_servers%,}"
+        log "INFO" "监听端口: ${listen_ports%,}"
+        
+        # 保存状态
+        set_status "UPSTREAM_SERVERS" "${upstream_servers%,}"
+        set_status "LISTEN_PORTS" "${listen_ports%,}"
+        set_status "MULTI_PORT_CONFIGURED" "1"
+        
+        # 验证保存结果
+        local saved_servers=$(get_status "UPSTREAM_SERVERS")
+        local saved_ports=$(get_status "LISTEN_PORTS")
+        log "INFO" "已保存的配置："
+        log "INFO" "上游服务器: ${saved_servers}"
+        log "INFO" "监听端口: ${saved_ports}"
+        
         log "SUCCESS" "端口转发配置完成"
         return 0
     else
@@ -299,12 +377,43 @@ install_bbr() {
     fi
 }
 
+# 检查配置的函数
+check_relay_config() {
+    log "INFO" "检查转发配置..."
+    
+    # 检查配置文件
+    if [ -f "/etc/haproxy/haproxy.cfg" ]; then
+        echo "HAProxy配置文件内容："
+        cat /etc/haproxy/haproxy.cfg
+    else
+        log "ERROR" "HAProxy配置文件不存在"
+    fi
+    
+    # 检查状态文件
+    if [ -f "$STATUS_FILE" ]; then
+        echo "状态文件内容："
+        cat "$STATUS_FILE"
+    else
+        log "ERROR" "状态文件不存在"
+    fi
+    
+    # 检查服务状态
+    echo "HAProxy服务状态："
+    systemctl status haproxy
+    
+    # 检查端口监听
+    echo "端口监听状态："
+    ss -tuln | grep 'LISTEN'
+}
+
 # 显示配置信息
 show_config() {
     echo "====================== 转发配置信息 ======================"
     
     local upstream_servers=$(get_status UPSTREAM_SERVERS)
     local listen_ports=$(get_status LISTEN_PORTS)
+    local stats_user=$(get_status STATS_USER)
+    local stats_pass=$(get_status STATS_PASS)
     
     if [ -n "$upstream_servers" ] && [ -n "$listen_ports" ]; then
         IFS=',' read -ra SERVERS <<< "$upstream_servers"
@@ -321,8 +430,8 @@ show_config() {
     
     echo -e "\nHAProxy 状态页面："
     echo -e "  地址: http://服务器IP:10086"
-    echo -e "  用户名: admin"
-    echo -e "  密码: admin123"
+    echo -e "  用户名: ${GREEN}${stats_user}${PLAIN}"
+    echo -e "  密码: ${GREEN}${stats_pass}${PLAIN}"
     echo "======================================================="
 }
 
@@ -407,6 +516,7 @@ show_menu() {
     echo " 7. 查看运行状态"
     echo " 8. 重启服务"
     echo " 9. 卸载所有组件"
+    echo " 10. 检查配置" # 新添加的选项
     echo " 0. 退出"
     echo "=========================================="
 }
@@ -431,7 +541,7 @@ main() {
     # 主循环
     while true; do
         show_menu
-        read -p "请选择操作[0-9]: " choice
+        read -p "请选择操作[0-10]: " choice
         case "${choice}" in
             0) 
                 exit 0 
@@ -462,6 +572,9 @@ main() {
                 ;;
             9)
                 uninstall_all
+                ;;
+            10)
+                check_relay_config
                 ;;
             *)
                 log "ERROR" "无效的选择"
