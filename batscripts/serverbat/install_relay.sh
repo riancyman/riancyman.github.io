@@ -33,6 +33,7 @@ init_status_file() {
         cat > "$STATUS_FILE" << EOF
 SYSTEM_PREPARED=0
 HAPROXY_INSTALLED=0
+NGINX_INSTALLED=0
 MULTI_PORT_CONFIGURED=0
 UFW_CONFIGURED=0
 BBR_INSTALLED=0
@@ -40,6 +41,7 @@ UPSTREAM_SERVERS=""
 LISTEN_PORTS=""
 STATS_USER=""
 STATS_PASS=""
+DOMAIN_NAME=""
 EOF
     fi
     chmod 600 "$STATUS_FILE"
@@ -66,15 +68,13 @@ set_status() {
     fi
 }
 
-# 检查安装结果
-check_install_success() {
-    local service=$1
-    local status=$2
-    
-    if [ "$status" -eq 0 ]; then
-        return 0
+# 检查端口是否被占用
+check_port() {
+    local port=$1
+    if ss -tuln | grep -q ":${port} "; then
+        return 1
     fi
-    return 1
+    return 0
 }
 
 # 系统环境准备
@@ -91,15 +91,188 @@ prepare_system() {
     apt-get update
     apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
     apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-        curl wget unzip ufw socat
+        curl wget unzip ufw socat nginx python3
 
     local status=$?
-    if check_install_success "系统环境" $status; then
+    if [ $status -eq 0 ]; then
         set_status SYSTEM_PREPARED 1
         log "SUCCESS" "系统环境准备完成"
         return 0
     else
         log "ERROR" "系统环境准备失败"
+        return 1
+    fi
+}
+
+# 安装配置Nginx伪装站点
+configure_nginx() {
+    log "INFO" "配置Nginx伪装站点..."
+    
+    # 安装Nginx
+    if ! command -v nginx >/dev/null; then
+        apt-get update
+        apt-get install -y nginx
+    fi
+    
+    # 询问是否配置域名
+    read -p "是否要配置域名？[y/N] " use_domain
+    if [[ "${use_domain,,}" == "y" ]]; then
+        read -p "请输入域名: " domain_name
+        set_status DOMAIN_NAME "${domain_name}"
+        log "INFO" "请将域名 ${domain_name} 解析到当前服务器IP"
+        read -p "解析完成后按回车继续..."
+    fi
+
+    # 配置伪装站点
+    echo "请选择伪装站点类型："
+    echo "1. 个人博客"
+    echo "2. 企业官网"
+    echo "3. 图片站"
+    echo "4. 下载站"
+    echo "5. 自定义网站"
+    read -p "请选择 [1-5]: " site_type
+    
+    # 创建伪装站点配置
+    cat > /etc/nginx/conf.d/default.conf << EOF
+server {
+    listen 80;
+    server_name ${domain_name:-_};
+    root /var/www/html;
+    index index.html;
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
+    # 根据选择配置不同的伪装站点
+    case "$site_type" in
+        1)
+            # 个人博客模板
+            cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Personal Blog</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #333; }
+        .article { margin-bottom: 20px; padding: 20px; background: #f9f9f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My Blog</h1>
+        <div class="article">
+            <h2>Latest Post</h2>
+            <p>This is my latest blog post about technology and life...</p>
+        </div>
+    </div>
+</body>
+</html>
+EOF
+            ;;
+        2)
+            # 企业官网模板
+            cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Company Name</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .header { background: #2c3e50; color: white; padding: 40px 20px; text-align: center; }
+        .content { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Welcome to Our Company</h1>
+        <p>Leading Innovation in Technology</p>
+    </div>
+    <div class="content">
+        <h2>About Us</h2>
+        <p>We are a leading technology company...</p>
+    </div>
+</body>
+</html>
+EOF
+            ;;
+        3)
+            # 图片站模板
+            cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Photo Gallery</title>
+    <style>
+        body { background: #000; color: #fff; font-family: Arial, sans-serif; }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; padding: 20px; }
+        .photo { background: #333; height: 200px; display: flex; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body>
+    <div class="gallery">
+        <div class="photo">Photo 1</div>
+        <div class="photo">Photo 2</div>
+        <div class="photo">Photo 3</div>
+    </div>
+</body>
+</html>
+EOF
+            ;;
+        4)
+            # 下载站模板
+            cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Download Center</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .download-item { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }
+        .button { background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Download Center</h1>
+    <div class="download-item">
+        <h3>Software v1.0</h3>
+        <p>Latest version with new features</p>
+        <a href="#" class="button">Download</a>
+    </div>
+</body>
+</html>
+EOF
+            ;;
+        5)
+            # 自定义网站
+            read -p "请输入自定义网站URL: " custom_url
+            if [ -n "$custom_url" ]; then
+                wget -O /var/www/html/index.html "$custom_url"
+                if [ $? -ne 0 ]; then
+                    log "ERROR" "下载自定义网站失败，使用默认页面"
+                    echo "<h1>Welcome</h1>" > /var/www/html/index.html
+                fi
+            fi
+            ;;
+    esac
+
+    # 设置目录权限
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
+    
+    # 重启Nginx
+    systemctl restart nginx
+    
+    if systemctl is-active --quiet nginx; then
+        set_status NGINX_INSTALLED 1
+        log "SUCCESS" "Nginx伪装站点配置完成"
+        return 0
+    else
+        log "ERROR" "Nginx启动失败"
         return 1
     fi
 }
@@ -112,68 +285,24 @@ install_haproxy() {
     apt-get update
     apt-get install -y haproxy
 
-    # 如果安装失败，尝试使用官方源
-    if [ $? -ne 0 ]; then
+    local status=$?
+    if [ $status -ne 0 ]; then
+        # 如果默认安装失败，尝试使用官方源
         curl -fsSL https://haproxy.debian.net/bernat.debian.org.gpg | gpg --dearmor -o /usr/share/keyrings/haproxy.debian.net.gpg
         echo "deb [signed-by=/usr/share/keyrings/haproxy.debian.net.gpg] http://haproxy.debian.net bookworm-backports-2.8 main" > /etc/apt/sources.list.d/haproxy.list
         apt-get update
         apt-get install -y haproxy=2.8.\*
+        status=$?
     fi
 
-    local status=$?
     if [ $status -ne 0 ]; then
         log "ERROR" "HAProxy 安装失败"
         return 1
     fi
-    
-    # 创建基础配置
-    cat > /etc/haproxy/haproxy.cfg << 'EOF'
-global
-    log /dev/log local0
-    log /dev/log local1 notice
-    chroot /var/lib/haproxy
-    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
-    stats timeout 30s
-    user haproxy
-    group haproxy
-    daemon
 
-defaults
-    log     global
-    mode    tcp
-    option  dontlognull
-    timeout connect 5000
-    timeout client  50000
-    timeout server  50000
-
-# 状态页面
-listen stats
-    bind *:10086
-    mode http
-    stats enable
-    stats hide-version
-    stats uri /
-    stats realm Haproxy\ Statistics
-    stats auth admin:admin123
-    stats refresh 10s
-EOF
-
-    # 设置权限
-    chown -R haproxy:haproxy /etc/haproxy
-    
-    # 启动服务
-    systemctl enable haproxy
-    systemctl restart haproxy
-
-    # 验证服务状态
-    if systemctl is-active --quiet haproxy; then
-        set_status HAPROXY_INSTALLED 1
-        log "SUCCESS" "HAProxy 安装完成"
-        return 0
-    else
-        log "ERROR" "HAProxy 启动失败"
-        return 1
-    fi
+    set_status HAPROXY_INSTALLED 1
+    log "SUCCESS" "HAProxy 安装完成"
+    return 0
 }
 
 # 配置端口转发
@@ -208,8 +337,8 @@ configure_relay() {
             log "ERROR" "密码长度必须大于等于6位"
         fi
     done
-    
-    # 询问上游服务器信息
+
+    # 询问上游服务器数量
     read -p "请输入上游服务器数量: " server_count
     
     # 准备配置文件
@@ -231,6 +360,7 @@ defaults
     log     global
     mode    tcp
     option  dontlognull
+    option  tcplog
     timeout connect 5000
     timeout client  50000
     timeout server  50000
@@ -245,6 +375,7 @@ listen stats
     stats realm Haproxy\ Statistics
     stats auth ${stats_user}:${stats_pass}
     stats refresh 10s
+    stats admin if TRUE
 EOF
 
     local upstream_servers=""
@@ -265,6 +396,7 @@ frontend ft_${listen_port}
 
 backend bk_${server_addr}_${server_port}
     mode tcp
+    option tcp-check
     server server1 ${server_addr}:${server_port} check inter 2000 rise 2 fall 3
 EOF
         
@@ -272,9 +404,11 @@ EOF
         listen_ports="${listen_ports}${listen_port},"
     done
 
-    # 保存认证信息到状态文件
+    # 保存配置信息
     set_status STATS_USER "${stats_user}"
     set_status STATS_PASS "${stats_pass}"
+    set_status UPSTREAM_SERVERS "${upstream_servers%,}"
+    set_status LISTEN_PORTS "${listen_ports%,}"
     
     # 检查配置语法
     if ! haproxy -c -f /etc/haproxy/haproxy.cfg; then
@@ -287,23 +421,7 @@ EOF
     systemctl restart haproxy
     
     if systemctl is-active --quiet haproxy; then
-        # 添加调试日志
-        log "INFO" "保存配置信息："
-        log "INFO" "上游服务器: ${upstream_servers%,}"
-        log "INFO" "监听端口: ${listen_ports%,}"
-        
-        # 保存状态
-        set_status "UPSTREAM_SERVERS" "${upstream_servers%,}"
-        set_status "LISTEN_PORTS" "${listen_ports%,}"
-        set_status "MULTI_PORT_CONFIGURED" "1"
-        
-        # 验证保存结果
-        local saved_servers=$(get_status "UPSTREAM_SERVERS")
-        local saved_ports=$(get_status "LISTEN_PORTS")
-        log "INFO" "已保存的配置："
-        log "INFO" "上游服务器: ${saved_servers}"
-        log "INFO" "监听端口: ${saved_ports}"
-        
+        set_status MULTI_PORT_CONFIGURED 1
         log "SUCCESS" "端口转发配置完成"
         return 0
     else
@@ -330,11 +448,16 @@ configure_ufw() {
     # 允许SSH
     ufw allow ${ssh_port}/tcp
     
+    # 允许HTTP(用于伪装网站)
+    ufw allow 80/tcp
+    
     # 允许HAProxy端口
     local listen_ports=$(get_status LISTEN_PORTS)
     IFS=',' read -ra PORTS <<< "$listen_ports"
     for port in "${PORTS[@]}"; do
-        ufw allow ${port}/tcp
+        if [ -n "$port" ]; then
+            ufw allow ${port}/tcp
+        fi
     done
     
     # 允许状态监控端口
@@ -366,7 +489,7 @@ install_bbr() {
     echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
     echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
     sysctl -p
-    
+
     if lsmod | grep -q bbr; then
         set_status BBR_INSTALLED 1
         log "SUCCESS" "BBR 配置完成"
@@ -377,39 +500,17 @@ install_bbr() {
     fi
 }
 
-# 检查配置的函数
-check_relay_config() {
-    log "INFO" "检查转发配置..."
-    
-    # 检查配置文件
-    if [ -f "/etc/haproxy/haproxy.cfg" ]; then
-        echo "HAProxy配置文件内容："
-        cat /etc/haproxy/haproxy.cfg
-    else
-        log "ERROR" "HAProxy配置文件不存在"
-    fi
-    
-    # 检查状态文件
-    if [ -f "$STATUS_FILE" ]; then
-        echo "状态文件内容："
-        cat "$STATUS_FILE"
-    else
-        log "ERROR" "状态文件不存在"
-    fi
-    
-    # 检查服务状态
-    echo "HAProxy服务状态："
-    systemctl status haproxy
-    
-    # 检查端口监听
-    echo "端口监听状态："
-    ss -tuln | grep 'LISTEN'
-}
-
 # 显示配置信息
 show_config() {
     echo "====================== 转发配置信息 ======================"
     
+    # 显示域名信息
+    local domain=$(get_status DOMAIN_NAME)
+    if [ -n "$domain" ]; then
+        echo -e "已配置域名: ${GREEN}${domain}${PLAIN}"
+    fi
+    
+    # 显示转发规则
     local upstream_servers=$(get_status UPSTREAM_SERVERS)
     local listen_ports=$(get_status LISTEN_PORTS)
     local stats_user=$(get_status STATS_USER)
@@ -419,33 +520,39 @@ show_config() {
         IFS=',' read -ra SERVERS <<< "$upstream_servers"
         IFS=',' read -ra PORTS <<< "$listen_ports"
         
+        echo -e "\n转发规则："
         for i in "${!SERVERS[@]}"; do
-            echo -e "转发规则 $((i+1)):"
+            echo -e "规则 $((i+1)):"
             echo -e "  本地端口: ${GREEN}${PORTS[i]}${PLAIN}"
             echo -e "  上游服务器: ${GREEN}${SERVERS[i]}${PLAIN}"
         done
-    else
-        echo "未找到转发配置"
     fi
     
     echo -e "\nHAProxy 状态页面："
     echo -e "  地址: http://服务器IP:10086"
+    if [ -n "$domain" ]; then
+        echo -e "  或者: http://${domain}:10086"
+    fi
     echo -e "  用户名: ${GREEN}${stats_user}${PLAIN}"
     echo -e "  密码: ${GREEN}${stats_pass}${PLAIN}"
+    
     echo "======================================================="
 }
 
-# 显示状态
+# 查看服务状态
 show_status() {
     echo "====================== 服务运行状态 ======================"
     
-    echo -e "\n[ HAProxy 状态 ]"
+    echo -e "\n[ Nginx状态 ]"
+    systemctl status nginx --no-pager | grep -E "Active:|running"
+    
+    echo -e "\n[ HAProxy状态 ]"
     systemctl status haproxy --no-pager | grep -E "Active:|running"
     
-    echo -e "\n[ UFW 状态 ]"
+    echo -e "\n[ UFW状态 ]"
     ufw status verbose
     
-    echo -e "\n[ BBR 状态 ]"
+    echo -e "\n[ BBR状态 ]"
     if lsmod | grep -q bbr; then
         echo -e "${GREEN}BBR: 已启用${PLAIN}"
     else
@@ -453,21 +560,31 @@ show_status() {
     fi
     
     echo -e "\n[ 端口监听状态 ]"
-    ss -tuln | grep -E ":(10086|${listen_ports// /|})"
+    ss -tuln | grep -E ':(80|10086|'$(get_status LISTEN_PORTS | tr ',' '|')')'
     echo "======================================================="
 }
 
 # 重启服务
 restart_services() {
-    log "INFO" "重启服务..."
+    log "INFO" "重启所有服务..."
     
+    systemctl restart nginx
     systemctl restart haproxy
     
-    if systemctl is-active --quiet haproxy; then
-        log "SUCCESS" "服务重启成功"
+    local has_error=0
+    if ! systemctl is-active --quiet nginx; then
+        log "ERROR" "Nginx重启失败"
+        has_error=1
+    fi
+    
+    if ! systemctl is-active --quiet haproxy; then
+        log "ERROR" "HAProxy重启失败"
+        has_error=1
+    fi
+    
+    if [ $has_error -eq 0 ]; then
+        log "SUCCESS" "所有服务重启成功"
         show_status
-    else
-        log "ERROR" "服务重启失败"
     fi
 }
 
@@ -479,11 +596,13 @@ uninstall_all() {
         return 0
     fi
     
-    systemctl stop haproxy
-    systemctl disable haproxy
-    apt remove --purge -y haproxy
+    systemctl stop nginx haproxy
+    systemctl disable nginx haproxy
+    apt remove --purge -y nginx haproxy
+    rm -rf /etc/nginx
     rm -rf /etc/haproxy
     rm -rf $INSTALL_STATUS_DIR
+    rm -rf /var/www/html/*
     ufw --force reset
     ufw disable
     
@@ -508,15 +627,15 @@ show_menu() {
     clear
     echo "=========== HAProxy 中转管理系统 ==========="
     echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 2. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 3. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 4. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 5. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo " 6. 查看配置信息"
-    echo " 7. 查看运行状态"
-    echo " 8. 重启服务"
-    echo " 9. 卸载所有组件"
-    echo " 10. 检查配置" # 新添加的选项
+    echo -e " 2. 配置伪装站点 $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 3. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 4. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 5. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 6. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo " 7. 查看配置信息"
+    echo " 8. 查看运行状态"
+    echo " 9. 重启所有服务"
+    echo " 10. 卸载所有组件"
     echo " 0. 退出"
     echo "=========================================="
 }
@@ -543,42 +662,18 @@ main() {
         show_menu
         read -p "请选择操作[0-10]: " choice
         case "${choice}" in
-            0) 
-                exit 0 
-                ;;
-            1) 
-                check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system
-                ;;
-            2)
-                check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy
-                ;;
-            3)
-                check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay
-                ;;
-            4)
-                check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw
-                ;;
-            5)
-                check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr
-                ;;
-            6)
-                show_config
-                ;;
-            7)
-                show_status
-                ;;
-            8)
-                restart_services
-                ;;
-            9)
-                uninstall_all
-                ;;
-            10)
-                check_relay_config
-                ;;
-            *)
-                log "ERROR" "无效的选择"
-                ;;
+            0) exit 0 ;;
+            1) check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system ;;
+            2) check_reinstall "伪装站点" "NGINX_INSTALLED" && configure_nginx ;;
+            3) check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy ;;
+            4) check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay ;;
+            5) check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw ;;
+            6) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
+            7) show_config ;;
+            8) show_status ;;
+            9) restart_services ;;
+            10) uninstall_all ;;
+            *) log "ERROR" "无效的选择" ;;
         esac
         echo
         read -p "按回车键继续..." </dev/tty
