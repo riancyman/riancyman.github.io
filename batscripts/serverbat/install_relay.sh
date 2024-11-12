@@ -167,7 +167,7 @@ configure_relay() {
         if ! check_port $listen_port; then
             log "ERROR" "端口 ${listen_port} 已被占用"
             continue
-        }
+        fi
         
         # 生成配置
         config_content="${config_content}
