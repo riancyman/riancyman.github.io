@@ -65,7 +65,12 @@ set_status() {
         else
             echo "${key}=${value}" >> "$STATUS_FILE"
         fi
+        # 验证设置是否成功
+        if [ "$(get_status $key)" = "$value" ]; then
+            return 0
+        fi
     fi
+    return 1
 }
 
 # 检查端口是否被占用
@@ -87,19 +92,75 @@ prepare_system() {
     # 设置非交互模式
     export DEBIAN_FRONTEND=noninteractive
     
-    # 更新系统和安装基础包
-    apt-get update
-    apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
-    apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-        curl wget unzip ufw socat nginx python3
-
-    local status=$?
-    if [ $status -eq 0 ]; then
-        set_status SYSTEM_PREPARED 1
+    # 更新系统
+    log "INFO" "更新系统..."
+    if ! apt-get update; then
+        log "ERROR" "系统更新失败"
+        return 1
+    fi
+    
+    # 更新软件包
+    log "INFO" "更新软件包..."
+    if ! apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade; then
+        log "ERROR" "软件包更新失败"
+        return 1
+    fi
+    
+    # 安装基础包
+    log "INFO" "安装基础软件包..."
+    if ! apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+        curl wget unzip ufw socat nginx python3; then
+        log "ERROR" "基础软件包安装失败"
+        return 1
+    fi
+    
+    # 验证必要软件是否安装成功
+    local required_packages=("curl" "wget" "unzip" "ufw" "socat" "nginx" "python3")
+    local missing_packages=()
+    
+    for pkg in "${required_packages[@]}"; do
+        if ! command -v $pkg >/dev/null 2>&1; then
+            missing_packages+=($pkg)
+        fi
+    done
+    
+    if [ ${#missing_packages[@]} -ne 0 ]; then
+        log "ERROR" "以下软件包安装失败: ${missing_packages[*]}"
+        return 1
+    fi
+    
+    # 设置系统优化参数
+    log "INFO" "设置系统参数..."
+    cat >> /etc/sysctl.conf << EOF
+# 系统优化参数
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_fin_timeout = 30
+net.ipv4.tcp_keepalive_time = 1200
+net.ipv4.ip_local_port_range = 10000 65000
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_max_tw_buckets = 5000
+net.ipv4.tcp_max_orphans = 3276800
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_window_scaling = 1
+EOF
+    
+    # 应用系统参数
+    if ! sysctl -p; then
+        log "WARNING" "系统参数设置可能未完全生效"
+    fi
+    
+    # 设置时区
+    log "INFO" "设置系统时区..."
+    timedatectl set-timezone Asia/Shanghai
+    
+    # 所有检查通过，设置状态并返回
+    if set_status SYSTEM_PREPARED 1; then
         log "SUCCESS" "系统环境准备完成"
         return 0
     else
-        log "ERROR" "系统环境准备失败"
+        log "ERROR" "状态设置失败"
         return 1
     fi
 }
@@ -626,12 +687,27 @@ check_reinstall() {
 show_menu() {
     clear
     echo "=========== HAProxy 中转管理系统 ==========="
-    echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 2. 配置伪装站点 $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 3. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 4. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 5. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 6. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    
+    # 检查状态文件是否存在且可读
+    if [ ! -f "$STATUS_FILE" ] || [ ! -r "$STATUS_FILE" ]; then
+        log "ERROR" "状态文件不存在或无法读取"
+        init_status_file
+    fi
+    
+    # 读取并显示各个组件状态
+    local system_status=$(get_status SYSTEM_PREPARED)
+    local nginx_status=$(get_status NGINX_INSTALLED)
+    local haproxy_status=$(get_status HAPROXY_INSTALLED)
+    local relay_status=$(get_status MULTI_PORT_CONFIGURED)
+    local ufw_status=$(get_status UFW_CONFIGURED)
+    local bbr_status=$(get_status BBR_INSTALLED)
+    
+    echo -e " 1. 系统环境准备 $(if [ "$system_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 2. 配置伪装站点 $(if [ "$nginx_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 3. 安装 HAProxy $(if [ "$haproxy_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 4. 配置端口转发 $(if [ "$relay_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 5. 配置 UFW 防火墙 $(if [ "$ufw_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 6. 安装 BBR 加速 $(if [ "$bbr_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
     echo " 7. 查看配置信息"
     echo " 8. 查看运行状态"
     echo " 9. 重启所有服务"
