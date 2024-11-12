@@ -527,31 +527,7 @@ install_trojan() {
         "alpn": [
             "http/1.1"
         ],
-        "session_ticket": true,
-        "reuse_session": true,
-        "fallback_addr": "127.0.0.1",
         "fallback_port": 80
-    },
-    "router": {
-        "enabled": true,
-        "bypass": [
-            "geoip:private",
-            "geoip:cn",
-            "geosite:cn",
-            "geosite:private"
-        ],
-        "block": [
-            "geosite:category-ads"
-        ],
-        "proxy": [
-            "geosite:geolocation-!cn"
-        ]
-    },
-    "tcp": {
-        "no_delay": true,
-        "keep_alive": true,
-        "reuse_port": true,
-        "prefer_ipv4": false
     }
 }
 EOF
@@ -592,26 +568,16 @@ EOF
    # 更新 Nginx 配置为仅监听本地
    cat > /etc/nginx/conf.d/default.conf << EOF
 server {
-   listen 127.0.0.1:80;
-   server_name _;
-   root /usr/share/nginx/html;
-   index index.html index.htm;
+    listen 127.0.0.1:80 default_server;
+    listen [::1]:80 default_server;
+    server_name _;
+    
+    root /usr/share/nginx/html;
+    index index.html index.htm;
 
-   location / {
-       try_files \$uri \$uri/ =404;
-   }
-
-   # 禁止访问敏感文件
-   location ~ .*\.(git|zip|rar|sql|conf|env)$ {
-       deny all;
-   }
-
-   # 错误页面
-   error_page 404 /404.html;
-   error_page 500 502 503 504 /50x.html;
-   location = /50x.html {
-       root /usr/share/nginx/html;
-   }
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
 }
 EOF
 
@@ -928,6 +894,47 @@ show_menu() {
    echo " 10. 卸载所有组件"
    echo " 0. 退出"
    echo "==========================================="
+}
+
+check_trojan_status() {
+    echo "=================== 诊断信息 ==================="
+    
+    # 检查证书
+    echo "1. 检查证书："
+    local domain=$(get_status DOMAIN)
+    if [ -f "/etc/trojan-go/cert/${domain}.pem" ] && [ -f "/etc/trojan-go/cert/${domain}.key" ]; then
+        echo "   证书文件存在"
+        ls -l /etc/trojan-go/cert/${domain}.pem /etc/trojan-go/cert/${domain}.key
+    else
+        echo "   证书文件缺失"
+    fi
+    
+    # 检查端口占用
+    echo -e "\n2. 检查端口监听："
+    ss -tulpn | grep -E ':80|:443'
+    
+    # 检查 Trojan-Go 配置
+    echo -e "\n3. Trojan-Go 配置检查："
+    if [ -f "/etc/trojan-go/config.json" ]; then
+        echo "   配置文件存在"
+        jq . /etc/trojan-go/config.json 2>/dev/null || echo "   配置文件格式错误"
+    else
+        echo "   配置文件不存在"
+    fi
+    
+    # 检查服务状态
+    echo -e "\n4. 服务状态："
+    systemctl status trojan-go | grep -E "Active:|running"
+    
+    # 检查防火墙
+    echo -e "\n5. 防火墙状态："
+    ufw status | grep -E "443|80"
+    
+    # 检查日志
+    echo -e "\n6. 最近的错误日志："
+    tail -n 10 /var/log/trojan-go/error.log
+    
+    echo "=============================================="
 }
 
 # 主函数
