@@ -34,6 +34,7 @@ init_status_file() {
 SYSTEM_PREPARED=0
 HAPROXY_INSTALLED=0
 NGINX_INSTALLED=0
+CERT_INSTALLED=0
 MULTI_PORT_CONFIGURED=0
 UFW_CONFIGURED=0
 BBR_INSTALLED=0
@@ -165,25 +166,103 @@ EOF
     fi
 }
 
-# 安装配置Nginx伪装站点
+# 申请SSL证书
+install_cert() {
+    log "INFO" "开始申请SSL证书..."
+    
+    # 获取域名
+    local domain
+    if [ -n "$(get_status DOMAIN_NAME)" ]; then
+        read -p "已配置域名$(get_status DOMAIN_NAME)，是否使用新域名？[y/N] " change_domain
+        if [[ "${change_domain,,}" != "y" ]]; then
+            domain=$(get_status DOMAIN_NAME)
+        fi
+    fi
+    
+    if [ -z "$domain" ]; then
+        read -p "请输入你的域名：" domain
+        if [ -z "$domain" ]; then
+            log "ERROR" "域名不能为空"
+            return 1
+        fi
+    fi
+    
+    # 创建证书目录
+    mkdir -p /etc/haproxy/certs
+    chmod 700 /etc/haproxy/certs
+
+    # 停止相关服务
+    systemctl stop nginx haproxy
+
+    # 安装acme.sh
+    if [ ! -f ~/.acme.sh/acme.sh ]; then
+        log "INFO" "安装 acme.sh..."
+        curl -fsSL https://get.acme.sh | sh -s email=admin@${domain}
+        if [ $? -ne 0 ]; then
+            log "ERROR" "acme.sh 安装失败"
+            return 1
+        fi
+        source ~/.bashrc
+    else
+        log "INFO" "acme.sh 已安装，尝试更新..."
+        ~/.acme.sh/acme.sh --upgrade
+    fi
+
+    # 申请证书
+    log "INFO" "申请SSL证书..."
+    ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
+        --keylength ec-256 \
+        --key-file /etc/haproxy/certs/${domain}.key \
+        --fullchain-file /etc/haproxy/certs/${domain}.pem
+
+    if [ $? -ne 0 ]; then
+        log "ERROR" "证书申请失败"
+        systemctl start nginx haproxy
+        return 1
+    fi
+
+    # 合并证书和私钥为HAProxy格式
+    cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > \
+        /etc/haproxy/certs/${domain}.pem.combined
+
+    # 设置证书权限
+    chmod 600 /etc/haproxy/certs/${domain}.pem.combined
+    chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined
+
+    # 配置证书自动更新
+    ~/.acme.sh/acme.sh --install-cert -d ${domain} \
+        --key-file /etc/haproxy/certs/${domain}.key \
+        --fullchain-file /etc/haproxy/certs/${domain}.pem \
+        --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && systemctl restart haproxy"
+
+    # 重启服务
+    systemctl start nginx haproxy
+
+    # 保存配置
+    set_status CERT_INSTALLED 1
+    set_status DOMAIN_NAME ${domain}
+    
+    log "SUCCESS" "SSL证书配置完成"
+    return 0
+}
+
+# 配置Nginx伪装站点
 configure_nginx() {
     log "INFO" "配置Nginx伪装站点..."
     
-    # 安装Nginx
-    if ! command -v nginx >/dev/null; then
-        apt-get update
-        apt-get install -y nginx
+    # 检查是否需要重新配置域名
+    local domain
+    if [ -n "$(get_status DOMAIN_NAME)" ]; then
+        domain=$(get_status DOMAIN_NAME)
+    else
+        read -p "请输入你的域名: " domain
+        if [ -z "$domain" ]; then
+            log "ERROR" "域名不能为空"
+            return 1
+        fi
+        set_status DOMAIN_NAME "$domain"
     fi
     
-    # 询问是否配置域名
-    read -p "是否要配置域名？[y/N] " use_domain
-    if [[ "${use_domain,,}" == "y" ]]; then
-        read -p "请输入域名: " domain_name
-        set_status DOMAIN_NAME "${domain_name}"
-        log "INFO" "请将域名 ${domain_name} 解析到当前服务器IP"
-        read -p "解析完成后按回车继续..."
-    fi
-
     # 配置伪装站点
     echo "请选择伪装站点类型："
     echo "1. 个人博客"
@@ -193,13 +272,24 @@ configure_nginx() {
     echo "5. 自定义网站"
     read -p "请选择 [1-5]: " site_type
     
-    # 创建伪装站点配置
+    # 配置Nginx
     cat > /etc/nginx/conf.d/default.conf << EOF
 server {
     listen 80;
-    server_name ${domain_name:-_};
+    server_name ${domain};
     root /var/www/html;
     index index.html;
+    
+    # SSL配置
+    listen 443 ssl;
+    ssl_certificate /etc/haproxy/certs/${domain}.pem;
+    ssl_certificate_key /etc/haproxy/certs/${domain}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers on;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
     
     location / {
         try_files \$uri \$uri/ =404;
@@ -216,6 +306,7 @@ EOF
 <html>
 <head>
     <title>My Personal Blog</title>
+    <meta charset="utf-8">
     <style>
         body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; }
@@ -242,6 +333,7 @@ EOF
 <html>
 <head>
     <title>Company Name</title>
+    <meta charset="utf-8">
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
         .header { background: #2c3e50; color: white; padding: 40px 20px; text-align: center; }
@@ -268,6 +360,7 @@ EOF
 <html>
 <head>
     <title>Photo Gallery</title>
+    <meta charset="utf-8">
     <style>
         body { background: #000; color: #fff; font-family: Arial, sans-serif; }
         .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; padding: 20px; }
@@ -291,6 +384,7 @@ EOF
 <html>
 <head>
     <title>Download Center</title>
+    <meta charset="utf-8">
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
         .download-item { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }
@@ -361,6 +455,10 @@ install_haproxy() {
         return 1
     fi
 
+    # 创建证书目录
+    mkdir -p /etc/haproxy/certs
+    chmod 700 /etc/haproxy/certs
+
     set_status HAPROXY_INSTALLED 1
     log "SUCCESS" "HAProxy 安装完成"
     return 0
@@ -369,6 +467,13 @@ install_haproxy() {
 # 配置端口转发
 configure_relay() {
     log "INFO" "配置端口转发..."
+    
+    # 检查证书
+    local domain=$(get_status DOMAIN_NAME)
+    if [ ! -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
+        log "ERROR" "未找到SSL证书，请先配置证书"
+        return 1
+    fi
     
     # 配置状态页面认证
     local stats_user
@@ -416,6 +521,10 @@ global
     user haproxy
     group haproxy
     daemon
+    # SSL设置
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
 
 defaults
     log     global
@@ -426,15 +535,15 @@ defaults
     timeout client  50000
     timeout server  50000
 
-# 状态页面
+# HTTPS状态页面
 listen stats
-    bind *:10086
+    bind *:10086 ssl crt /etc/haproxy/certs/${domain}.pem.combined
     mode http
     stats enable
     stats hide-version
     stats uri /
     stats realm Haproxy\ Statistics
-    stats auth ${stats_user}:${stats_pass}
+    stats auth ${stats_user}:'${stats_pass}'
     stats refresh 10s
     stats admin if TRUE
 EOF
@@ -451,8 +560,9 @@ EOF
         cat >> /etc/haproxy/haproxy.cfg << EOF
 
 frontend ft_${listen_port}
-    bind *:${listen_port}
+    bind *:${listen_port} ssl crt /etc/haproxy/certs/${domain}.pem.combined
     mode tcp
+    option tcplog
     default_backend bk_${server_addr}_${server_port}
 
 backend bk_${server_addr}_${server_port}
@@ -509,8 +619,9 @@ configure_ufw() {
     # 允许SSH
     ufw allow ${ssh_port}/tcp
     
-    # 允许HTTP(用于伪装网站)
+    # 允许HTTP和HTTPS（用于伪装网站和证书申请）
     ufw allow 80/tcp
+    ufw allow 443/tcp
     
     # 允许HAProxy端口
     local listen_ports=$(get_status LISTEN_PORTS)
@@ -568,7 +679,7 @@ show_config() {
     # 显示域名信息
     local domain=$(get_status DOMAIN_NAME)
     if [ -n "$domain" ]; then
-        echo -e "已配置域名: ${GREEN}${domain}${PLAIN}"
+        echo -e "域名: ${GREEN}${domain}${PLAIN}"
     fi
     
     # 显示转发规则
@@ -590,12 +701,16 @@ show_config() {
     fi
     
     echo -e "\nHAProxy 状态页面："
-    echo -e "  地址: http://服务器IP:10086"
-    if [ -n "$domain" ]; then
-        echo -e "  或者: http://${domain}:10086"
-    fi
+    echo -e "  地址: https://${domain}:10086"
     echo -e "  用户名: ${GREEN}${stats_user}${PLAIN}"
     echo -e "  密码: ${GREEN}${stats_pass}${PLAIN}"
+    
+    # 显示证书信息
+    if [ -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
+        echo -e "\nSSL证书信息："
+        echo -e "  证书路径: /etc/haproxy/certs/${domain}.pem.combined"
+        echo -e "  自动续期: 已配置"
+    fi
     
     echo "======================================================="
 }
@@ -620,8 +735,17 @@ show_status() {
         echo -e "${RED}BBR: 未启用${PLAIN}"
     fi
     
+    echo -e "\n[ SSL证书状态 ]"
+    local domain=$(get_status DOMAIN_NAME)
+    if [ -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
+        echo -e "${GREEN}证书: 已安装${PLAIN}"
+        openssl x509 -in /etc/haproxy/certs/${domain}.pem -noout -dates
+    else
+        echo -e "${RED}证书: 未安装${PLAIN}"
+    fi
+    
     echo -e "\n[ 端口监听状态 ]"
-    ss -tuln | grep -E ':(80|10086|'$(get_status LISTEN_PORTS | tr ',' '|')')'
+    ss -tuln | grep -E ':(80|443|10086|'$(get_status LISTEN_PORTS | tr ',' '|')')'
     echo "======================================================="
 }
 
@@ -657,13 +781,26 @@ uninstall_all() {
         return 0
     fi
     
+    # 停止服务
     systemctl stop nginx haproxy
     systemctl disable nginx haproxy
+    
+    # 卸载软件包
     apt remove --purge -y nginx haproxy
+    
+    # 清理证书
+    if [ -d ~/.acme.sh ]; then
+        ~/.acme.sh/acme.sh --uninstall
+        rm -rf ~/.acme.sh
+    fi
+    
+    # 清理配置文件
     rm -rf /etc/nginx
     rm -rf /etc/haproxy
     rm -rf $INSTALL_STATUS_DIR
     rm -rf /var/www/html/*
+    
+    # 重置防火墙
     ufw --force reset
     ufw disable
     
@@ -687,31 +824,17 @@ check_reinstall() {
 show_menu() {
     clear
     echo "=========== HAProxy 中转管理系统 ==========="
-    
-    # 检查状态文件是否存在且可读
-    if [ ! -f "$STATUS_FILE" ] || [ ! -r "$STATUS_FILE" ]; then
-        log "ERROR" "状态文件不存在或无法读取"
-        init_status_file
-    fi
-    
-    # 读取并显示各个组件状态
-    local system_status=$(get_status SYSTEM_PREPARED)
-    local nginx_status=$(get_status NGINX_INSTALLED)
-    local haproxy_status=$(get_status HAPROXY_INSTALLED)
-    local relay_status=$(get_status MULTI_PORT_CONFIGURED)
-    local ufw_status=$(get_status UFW_CONFIGURED)
-    local bbr_status=$(get_status BBR_INSTALLED)
-    
-    echo -e " 1. 系统环境准备 $(if [ "$system_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 2. 配置伪装站点 $(if [ "$nginx_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 3. 安装 HAProxy $(if [ "$haproxy_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 4. 配置端口转发 $(if [ "$relay_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 5. 配置 UFW 防火墙 $(if [ "$ufw_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 6. 安装 BBR 加速 $(if [ "$bbr_status" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo " 7. 查看配置信息"
-    echo " 8. 查看运行状态"
-    echo " 9. 重启所有服务"
-    echo " 10. 卸载所有组件"
+    echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 2. 配置伪装站点 $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 3. 申请SSL证书 $(if [ "$(get_status CERT_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 4. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 5. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 6. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 7. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo " 8. 查看配置信息"
+    echo " 9. 查看运行状态"
+    echo " 10. 重启所有服务"
+    echo " 11. 卸载所有组件"
     echo " 0. 退出"
     echo "=========================================="
 }
@@ -736,19 +859,20 @@ main() {
     # 主循环
     while true; do
         show_menu
-        read -p "请选择操作[0-10]: " choice
+        read -p "请选择操作[0-11]: " choice
         case "${choice}" in
             0) exit 0 ;;
             1) check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system ;;
             2) check_reinstall "伪装站点" "NGINX_INSTALLED" && configure_nginx ;;
-            3) check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy ;;
-            4) check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay ;;
-            5) check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw ;;
-            6) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
-            7) show_config ;;
-            8) show_status ;;
-            9) restart_services ;;
-            10) uninstall_all ;;
+            3) check_reinstall "SSL证书" "CERT_INSTALLED" && install_cert ;;
+            4) check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy ;;
+            5) check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay ;;
+            6) check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw ;;
+            7) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
+            8) show_config ;;
+            9) show_status ;;
+            10) restart_services ;;
+            11) uninstall_all ;;
             *) log "ERROR" "无效的选择" ;;
         esac
         echo
