@@ -262,6 +262,11 @@ install_cert() {
             log "ERROR" "证书无效或已过期"
             return 1
         fi
+
+        # 更新Nginx SSL配置
+        if ! update_nginx_ssl "${domain}"; then
+            log "WARNING" "Nginx SSL配置更新失败，但证书已安装"
+        fi
     else
         log "ERROR" "证书文件不存在"
         return 1
@@ -272,6 +277,8 @@ install_cert() {
         --key-file /etc/haproxy/certs/${domain}.key \
         --fullchain-file /etc/haproxy/certs/${domain}.pem \
         --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && systemctl restart haproxy"
+
+
 
     # 重启服务
     systemctl start nginx haproxy
@@ -286,318 +293,378 @@ install_cert() {
 
 # 配置Nginx伪装站点
 configure_nginx() {
-    log "INFO" "配置Nginx伪装站点..."
-    
-    # 检查是否需要重新配置域名
-    local domain
-    if [ -n "$(get_status DOMAIN_NAME)" ]; then
-        domain=$(get_status DOMAIN_NAME)
-    else
-        read -p "请输入你的域名: " domain
-        if [ -z "$domain" ]; then
-            log "ERROR" "域名不能为空"
-            return 1
-        fi
-    fi
+   log "INFO" "配置Nginx伪装站点..."
+   
+   # 检查是否需要重新配置域名
+   local domain
+   if [ -n "$(get_status DOMAIN_NAME)" ]; then
+       domain=$(get_status DOMAIN_NAME)
+   else
+       read -p "请输入你的域名: " domain
+       if [ -z "$domain" ]; then
+           log "ERROR" "域名不能为空"
+           return 1
+       fi
+   fi
 
-    # 确保配置目录存在
-    mkdir -p /etc/nginx/conf.d
-    mkdir -p /var/log/nginx
+   # 创建必要的目录
+   mkdir -p /etc/nginx/conf.d
+   mkdir -p /var/log/nginx
 
-        # 创建 nginx.conf 主配置文件
-    cat > /etc/nginx/nginx.conf << 'EOF'
+   # 创建 nginx.conf 主配置文件
+   cat > /etc/nginx/nginx.conf << 'EOF'
 user www-data;
 worker_processes auto;
 pid /run/nginx.pid;
 include /etc/nginx/modules-enabled/*.conf;
 
 events {
-    worker_connections 768;
-    multi_accept on;
+   worker_connections 768;
+   multi_accept on;
 }
 
 http {
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
+   sendfile on;
+   tcp_nopush on;
+   tcp_nodelay on;
+   keepalive_timeout 65;
+   types_hash_max_size 2048;
 
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
+   include /etc/nginx/mime.types;
+   default_type application/octet-stream;
 
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
+   access_log /var/log/nginx/access.log;
+   error_log /var/log/nginx/error.log;
 
-    gzip on;
-    gzip_disable "msie6";
+   gzip on;
+   gzip_disable "msie6";
 
-    include /etc/nginx/conf.d/*.conf;
+   include /etc/nginx/conf.d/*.conf;
 }
 EOF
 
-    # 创建 mime.types 文件
-    cat > /etc/nginx/mime.types << 'EOF'
+   # 创建 mime.types 文件
+   cat > /etc/nginx/mime.types << 'EOF'
 types {
-    text/html                             html htm shtml;
-    text/css                              css;
-    text/xml                              xml;
-    image/gif                             gif;
-    image/jpeg                            jpeg jpg;
-    application/javascript                js;
-    application/atom+xml                  atom;
-    application/rss+xml                   rss;
+   text/html                             html htm shtml;
+   text/css                              css;
+   text/xml                              xml;
+   image/gif                             gif;
+   image/jpeg                            jpeg jpg;
+   application/javascript                js;
+   application/atom+xml                  atom;
+   application/rss+xml                   rss;
 
-    image/png                             png;
-    image/svg+xml                         svg svgz;
-    image/tiff                            tif tiff;
-    image/x-icon                          ico;
-    image/x-jng                           jng;
-    image/webp                            webp;
+   image/png                             png;
+   image/svg+xml                         svg svgz;
+   image/tiff                            tif tiff;
+   image/x-icon                          ico;
+   image/x-jng                           jng;
+   image/webp                            webp;
 
-    application/json                      json;
-    application/pdf                       pdf;
-    application/zip                       zip;
+   application/json                      json;
+   application/pdf                       pdf;
+   application/zip                       zip;
 
-    audio/midi                            mid midi kar;
-    audio/mpeg                            mp3;
-    audio/ogg                             ogg;
-    audio/x-m4a                           m4a;
+   audio/midi                            mid midi kar;
+   audio/mpeg                            mp3;
+   audio/ogg                             ogg;
+   audio/x-m4a                           m4a;
 
-    video/mp4                             mp4;
-    video/mpeg                            mpeg mpg;
-    video/webm                            webm;
-    video/x-flv                           flv;
+   video/mp4                             mp4;
+   video/mpeg                            mpeg mpg;
+   video/webm                            webm;
+   video/x-flv                           flv;
 }
 EOF
 
-    # 创建日志目录
-    mkdir -p /var/log/nginx
-    chown -R www-data:www-data /var/log/nginx
-    
-    # 配置Nginx
-    cat > /etc/nginx/conf.d/default.conf << EOF
+   # 创建日志目录
+   mkdir -p /var/log/nginx
+   chown -R www-data:www-data /var/log/nginx
+
+   # 配置虚拟主机
+   cat > /etc/nginx/conf.d/default.conf << EOF
 server {
-    listen 80;
-    server_name ${domain};
-    root /var/www/html;
-    index index.html;
-    
-    location / {
-        try_files \$uri \$uri/ =404;
+   listen 80;
+   server_name ${domain};
+   root /var/www/html;
+   index index.html;
+   
+   location / {
+       try_files \$uri \$uri/ =404;
+   }
+
+   # 禁止访问特定文件
+   location ~ /\. {
+       deny all;
+       access_log off;
+       log_not_found off;
+   }
+   
+   location = /favicon.ico {
+       log_not_found off;
+       access_log off;
+   }
+
+   location = /robots.txt {
+       log_not_found off;
+       access_log off;
+   }
+}
+EOF
+
+   # 配置伪装站点
+   echo "请选择伪装站点类型："
+   echo "1. 个人博客"
+   echo "2. 企业官网"
+   echo "3. 图片站"
+   echo "4. 下载站"
+   echo "5. 自定义网站"
+   read -p "请选择 [1-5]: " site_type
+   
+   # 确保网站目录存在
+   mkdir -p /var/www/html
+   
+   # 根据选择配置不同的伪装站点
+   case "$site_type" in
+       1)
+           # 个人博客模板
+           cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+   <title>My Personal Blog</title>
+   <meta charset="utf-8">
+   <style>
+       body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+       .container { max-width: 800px; margin: 0 auto; }
+       h1 { color: #333; }
+       .article { margin-bottom: 20px; padding: 20px; background: #f9f9f9; }
+   </style>
+</head>
+<body>
+   <div class="container">
+       <h1>Welcome to My Blog</h1>
+       <div class="article">
+           <h2>Latest Post</h2>
+           <p>This is my latest blog post about technology and life...</p>
+       </div>
+   </div>
+</body>
+</html>
+EOF
+           ;;
+       2)
+           # 企业官网模板
+           cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Company Name</title>
+   <meta charset="utf-8">
+   <style>
+       body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+       .header { background: #2c3e50; color: white; padding: 40px 20px; text-align: center; }
+       .content { max-width: 1000px; margin: 0 auto; padding: 20px; }
+   </style>
+</head>
+<body>
+   <div class="header">
+       <h1>Welcome to Our Company</h1>
+       <p>Leading Innovation in Technology</p>
+   </div>
+   <div class="content">
+       <h2>About Us</h2>
+       <p>We are a leading technology company...</p>
+   </div>
+</body>
+</html>
+EOF
+           ;;
+       3)
+           # 图片站模板
+           cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Photo Gallery</title>
+   <meta charset="utf-8">
+   <style>
+       body { background: #000; color: #fff; font-family: Arial, sans-serif; }
+       .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; padding: 20px; }
+       .photo { background: #333; height: 200px; display: flex; align-items: center; justify-content: center; }
+   </style>
+</head>
+<body>
+   <div class="gallery">
+       <div class="photo">Photo 1</div>
+       <div class="photo">Photo 2</div>
+       <div class="photo">Photo 3</div>
+   </div>
+</body>
+</html>
+EOF
+           ;;
+       4)
+           # 下载站模板
+           cat > /var/www/html/index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+   <title>Download Center</title>
+   <meta charset="utf-8">
+   <style>
+       body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+       .download-item { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }
+       .button { background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 3px; }
+   </style>
+</head>
+<body>
+   <h1>Download Center</h1>
+   <div class="download-item">
+       <h3>Software v1.0</h3>
+       <p>Latest version with new features</p>
+       <a href="#" class="button">Download</a>
+   </div>
+</body>
+</html>
+EOF
+           ;;
+       5)
+           # 自定义网站
+           read -p "请输入自定义网站URL: " custom_url
+           if [ -n "$custom_url" ]; then
+               wget -O /var/www/html/index.html "$custom_url"
+               if [ $? -ne 0 ]; then
+                   log "ERROR" "下载自定义网站失败，使用默认页面"
+                   echo "<h1>Welcome</h1>" > /var/www/html/index.html
+               fi
+           fi
+           ;;
+   esac
+
+   # 设置目录权限
+   chown -R www-data:www-data /var/www/html
+   chmod -R 755 /var/www/html
+   
+   # 检查Nginx配置语法
+   if ! nginx -t; then
+       log "ERROR" "Nginx配置检查失败"
+       return 1
+   fi
+   
+   # 重启Nginx
+   systemctl restart nginx
+   sleep 2  # 等待服务启动
+   
+   # 全面检查Nginx状态
+   local nginx_status=0
+   # 检查服务是否运行
+   if ! systemctl is-active --quiet nginx; then
+       log "ERROR" "Nginx服务未运行"
+       nginx_status=1
+   fi
+   
+   # 检查配置文件是否存在
+   if [ ! -f "/etc/nginx/conf.d/default.conf" ]; then
+       log "ERROR" "Nginx配置文件不存在"
+       nginx_status=1
+   fi
+   
+   # 检查网站文件是否存在
+   if [ ! -f "/var/www/html/index.html" ]; then
+       log "ERROR" "网站文件不存在"
+       nginx_status=1
+   fi
+   
+   # 检查80端口是否在监听
+   if ! ss -tuln | grep -q ':80 '; then
+       log "ERROR" "80端口未监听"
+       nginx_status=1
+   fi
+   
+   # 保存域名到状态文件
+   if ! set_status DOMAIN_NAME "${domain}"; then
+       log "ERROR" "保存域名配置失败"
+       return 1
+   fi
+   
+   if [ $nginx_status -eq 0 ]; then
+       if set_status NGINX_INSTALLED 1; then
+           log "SUCCESS" "Nginx伪装站点配置完成"
+           return 0
+       else
+           log "ERROR" "状态保存失败"
+           return 1
+       fi
+   else
+       log "ERROR" "Nginx配置失败"
+       return 1
+   fi
+}
+
+# 更新Nginx SSL配置
+update_nginx_ssl() {
+    local domain=$1
+    log "INFO" "更新Nginx SSL配置..."
+
+    # 检查证书是否存在
+    if [ ! -f "/etc/haproxy/certs/${domain}.pem" ] || [ ! -f "/etc/haproxy/certs/${domain}.key" ]; then
+        log "ERROR" "证书文件不存在"
+        return 1
     }
-}
-EOF
 
-    # 配置伪装站点
-    echo "请选择伪装站点类型："
-    echo "1. 个人博客"
-    echo "2. 企业官网"
-    echo "3. 图片站"
-    echo "4. 下载站"
-    echo "5. 自定义网站"
-    read -p "请选择 [1-5]: " site_type
-    
-    # 配置Nginx
+    # 更新Nginx配置
     cat > /etc/nginx/conf.d/default.conf << EOF
 server {
     listen 80;
+    listen [::]:80;
+    server_name ${domain};
+    return 301 https://\$server_name\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name ${domain};
     root /var/www/html;
     index index.html;
-    
-    # SSL配置
-    listen 443 ssl;
+
     ssl_certificate /etc/haproxy/certs/${domain}.pem;
     ssl_certificate_key /etc/haproxy/certs/${domain}.key;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
-    ssl_prefer_server_ciphers on;
+    ssl_prefer_server_ciphers off;
     ssl_session_timeout 1d;
     ssl_session_cache shared:SSL:50m;
     ssl_session_tickets off;
-    
+
     location / {
         try_files \$uri \$uri/ =404;
+    }
+
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
     }
 }
 EOF
 
-    # 根据选择配置不同的伪装站点
-    case "$site_type" in
-        1)
-            # 个人博客模板
-            cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>My Personal Blog</title>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { color: #333; }
-        .article { margin-bottom: 20px; padding: 20px; background: #f9f9f9; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Welcome to My Blog</h1>
-        <div class="article">
-            <h2>Latest Post</h2>
-            <p>This is my latest blog post about technology and life...</p>
-        </div>
-    </div>
-</body>
-</html>
-EOF
-            ;;
-        2)
-            # 企业官网模板
-            cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Company Name</title>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-        .header { background: #2c3e50; color: white; padding: 40px 20px; text-align: center; }
-        .content { max-width: 1000px; margin: 0 auto; padding: 20px; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Welcome to Our Company</h1>
-        <p>Leading Innovation in Technology</p>
-    </div>
-    <div class="content">
-        <h2>About Us</h2>
-        <p>We are a leading technology company...</p>
-    </div>
-</body>
-</html>
-EOF
-            ;;
-        3)
-            # 图片站模板
-            cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Photo Gallery</title>
-    <meta charset="utf-8">
-    <style>
-        body { background: #000; color: #fff; font-family: Arial, sans-serif; }
-        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; padding: 20px; }
-        .photo { background: #333; height: 200px; display: flex; align-items: center; justify-content: center; }
-    </style>
-</head>
-<body>
-    <div class="gallery">
-        <div class="photo">Photo 1</div>
-        <div class="photo">Photo 2</div>
-        <div class="photo">Photo 3</div>
-    </div>
-</body>
-</html>
-EOF
-            ;;
-        4)
-            # 下载站模板
-            cat > /var/www/html/index.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Download Center</title>
-    <meta charset="utf-8">
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        .download-item { background: #f5f5f5; padding: 20px; margin: 10px 0; border-radius: 5px; }
-        .button { background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 3px; }
-    </style>
-</head>
-<body>
-    <h1>Download Center</h1>
-    <div class="download-item">
-        <h3>Software v1.0</h3>
-        <p>Latest version with new features</p>
-        <a href="#" class="button">Download</a>
-    </div>
-</body>
-</html>
-EOF
-            ;;
-        5)
-            # 自定义网站
-            read -p "请输入自定义网站URL: " custom_url
-            if [ -n "$custom_url" ]; then
-                wget -O /var/www/html/index.html "$custom_url"
-                if [ $? -ne 0 ]; then
-                    log "ERROR" "下载自定义网站失败，使用默认页面"
-                    echo "<h1>Welcome</h1>" > /var/www/html/index.html
-                fi
-            fi
-            ;;
-    esac
-
-    # 设置目录和权限
-    mkdir -p /var/www/html
-    chown -R www-data:www-data /var/www/html
-    chmod -R 755 /var/www/html
-    
-    # 保存域名到状态文件
-    if ! set_status DOMAIN_NAME "${domain}"; then
-        log "ERROR" "保存域名配置失败"
-        return 1
-    fi
-    
-    # 检查Nginx配置语法
+    # 检查配置
     if ! nginx -t; then
-        log "ERROR" "Nginx配置检查失败"
+        log "ERROR" "Nginx SSL配置检查失败"
         return 1
     fi
-    
+
     # 重启Nginx
     systemctl restart nginx
-    sleep 2  # 等待服务启动
-    
-    # 全面检查Nginx状态
-    local nginx_status=0
-    # 检查服务是否运行
-    if ! systemctl is-active --quiet nginx; then
-        log "ERROR" "Nginx服务未运行"
-        nginx_status=1
-    fi
-    
-    # 检查配置文件是否存在
-    if [ ! -f "/etc/nginx/conf.d/default.conf" ]; then
-        log "ERROR" "Nginx配置文件不存在"
-        nginx_status=1
-    fi
-    
-    # 检查网站文件是否存在
-    if [ ! -f "/var/www/html/index.html" ]; then
-        log "ERROR" "网站文件不存在"
-        nginx_status=1
-    fi
-    
-    # 检查80端口是否在监听
-    if ! ss -tuln | grep -q ':80 '; then
-        log "ERROR" "80端口未监听"
-        nginx_status=1
-    fi
-    
-    if [ $nginx_status -eq 0 ]; then
-        if set_status NGINX_INSTALLED 1; then
-            log "SUCCESS" "Nginx伪装站点配置完成"
-            return 0
-        else
-            log "ERROR" "状态保存失败"
-            return 1
-        fi
+
+    if systemctl is-active --quiet nginx; then
+        log "SUCCESS" "Nginx SSL配置更新完成"
+        return 0
     else
-        log "ERROR" "Nginx配置失败"
+        log "ERROR" "Nginx重启失败"
         return 1
     fi
 }
