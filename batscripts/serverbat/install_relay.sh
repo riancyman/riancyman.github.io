@@ -1207,74 +1207,83 @@ uninstall_all() {
         return 0
     fi
     
-    # 停止服务
-    if systemctl is-active --quiet nginx; then
-        log "INFO" "停止Nginx服务..."
-        systemctl stop nginx
-    fi
+    # 停止服务（使用 systemctl list-units 检查）
+    for service in nginx haproxy; do
+        if systemctl list-units --full -all | grep -Fq "$service.service"; then
+            log "INFO" "停止 $service 服务..."
+            systemctl stop $service
+            systemctl disable $service
+        else
+            log "INFO" "$service 服务未安装"
+        fi
+    done
     
-    if systemctl is-active --quiet haproxy; then
-        log "INFO" "停止HAProxy服务..."
-        systemctl stop haproxy
-    fi
-    
-    # 禁用服务
-    if systemctl is-enabled --quiet nginx; then
-        log "INFO" "禁用Nginx服务..."
-        systemctl disable nginx
-    fi
-    
-    if systemctl is-enabled --quiet haproxy; then
-        log "INFO" "禁用HAProxy服务..."
-        systemctl disable haproxy
-    fi
-    
-    # 卸载软件包
+    # 卸载软件包（使用 dpkg -l 检查）
     log "INFO" "卸载软件包..."
-    if dpkg -l | grep -q nginx; then
-        apt remove --purge -y nginx nginx-common
-    else
-        log "INFO" "Nginx未安装，跳过卸载"
+    local packages_to_remove=()
+    for pkg in nginx nginx-common haproxy; do
+        if dpkg -l | grep -q "^ii.*$pkg "; then
+            packages_to_remove+=($pkg)
+        fi
+    done
+    
+    if [ ${#packages_to_remove[@]} -gt 0 ]; then
+        apt remove --purge -y "${packages_to_remove[@]}"
     fi
     
-    if dpkg -l | grep -q haproxy; then
-        apt remove --purge -y haproxy
-    else
-        log "INFO" "HAProxy未安装，跳过卸载"
-    fi
-    
-    # 清理证书
+    # 清理证书和acme.sh
     if [ -d ~/.acme.sh ]; then
-        log "INFO" "清理acme.sh..."
-        ~/.acme.sh/acme.sh --uninstall
+        log "INFO" "清理证书和acme.sh..."
+        if [ -f ~/.acme.sh/acme.sh ]; then
+            ~/.acme.sh/acme.sh --uninstall
+        fi
         rm -rf ~/.acme.sh
     fi
     
     # 清理配置文件和日志
     log "INFO" "清理配置文件和日志..."
-    rm -rf /etc/nginx
-    rm -rf /etc/haproxy
-    rm -rf $INSTALL_STATUS_DIR
-    rm -rf /var/www/html/*
-    rm -f /var/log/acme.sh.log
+    for dir in "/etc/nginx" "/etc/haproxy" "$INSTALL_STATUS_DIR" "/var/www/html" "/var/log/nginx" "/var/log/haproxy"; do
+        if [ -d "$dir" ]; then
+            rm -rf "$dir"
+        fi
+    done
+
+    # 清理所有相关日志文件
+    log "INFO" "清理日志文件..."
+    rm -f /var/log/acme.sh.log           # acme.sh的主日志
+    rm -f ~/.acme.sh/*.log               # acme.sh的其他日志
+    rm -f ~/.acme.sh/acme.sh.log         # acme.sh的安装日志
+    rm -f /root/.acme.sh/*.log           # root用户下的acme.sh日志
+    rm -f /root/.acme.sh/acme.sh.log     # root用户下的acme.sh安装日志
+    
+    # 清理系统服务文件
+    log "INFO" "清理系统服务文件..."
+    for service in nginx haproxy; do
+        local service_file="/etc/systemd/system/$service.service"
+        if [ -f "$service_file" ]; then
+            rm -f "$service_file"
+        fi
+    done
+    systemctl daemon-reload
     
     # 重置防火墙
     log "INFO" "重置防火墙..."
     if command -v ufw >/dev/null 2>&1; then
-        ufw --force reset
-        ufw disable
+        ufw --force reset >/dev/null 2>&1
+        ufw disable >/dev/null 2>&1
     fi
     
-    # 清理系统参数（如果之前设置过）
+    # 清理系统参数
     if [ -f "/etc/sysctl.d/99-custom.conf" ]; then
         log "INFO" "清理系统参数..."
         rm -f /etc/sysctl.d/99-custom.conf
-        sysctl --system
+        sysctl --system >/dev/null 2>&1
     fi
     
-    # 提示是否需要清理未使用的依赖
-    log "INFO" "检查未使用的依赖..."
-    apt autoremove -y
+    # 自动清理未使用的依赖
+    log "INFO" "清理未使用的依赖..."
+    apt autoremove -y >/dev/null 2>&1
+    apt clean >/dev/null 2>&1
     
     log "SUCCESS" "卸载完成"
     
@@ -1323,92 +1332,146 @@ show_menu() {
 # 查看证书日志和诊断信息
 view_cert_log() {
     echo "====================== 证书诊断信息 ======================"
-    
-    # 检查域名解析
-    local domain=$(get_status DOMAIN_NAME)
-    if [ -n "$domain" ]; then
-        echo -e "\n域名解析检查："
-        echo "域名: $domain"
-        echo "解析IP: $(dig +short ${domain})"
-        echo "服务器IP: $(curl -s ifconfig.me)"
-    fi
+   
+   # 检查域名解析
+   local domain=$(get_status DOMAIN_NAME)
+   if [ -n "$domain" ]; then
+       echo -e "\n域名解析检查："
+       echo "域名: $domain"
+       echo "解析IP: $(dig +short ${domain})"
+       echo "服务器IP: $(curl -s ifconfig.me)"
+   fi
 
-    # 检查端口状态
-    echo -e "\n端口状态检查："
-    ss -tuln | grep -E ':(80|443)' || echo "80和443端口都未被占用"
+   # 检查端口状态
+   echo -e "\n端口状态检查："
+   ss -tuln | grep -E ':(80|443)' || echo "80和443端口都未被占用"
 
-    # 检查服务状态
-    echo -e "\n服务状态检查："
-    echo "Nginx状态: $(systemctl is-active nginx 2>/dev/null || echo '未安装')"
-    echo "HAProxy状态: $(systemctl is-active haproxy 2>/dev/null || echo '未安装')"
+   # 检查服务状态
+   echo -e "\n服务状态检查："
+   echo "Nginx状态: $(systemctl is-active nginx 2>/dev/null || echo '未安装')"
+   echo "HAProxy状态: $(systemctl is-active haproxy 2>/dev/null || echo '未安装')"
 
-    # 检查acme.sh安装
-    echo -e "\nacme.sh检查："
-    if [ -f ~/.acme.sh/acme.sh ]; then
-        echo "acme.sh版本: $($HOME/.acme.sh/acme.sh --version 2>&1 | head -n 1)"
-        echo "已配置域名: $($HOME/.acme.sh/acme.sh --list 2>/dev/null | grep -v "^Looking" || echo '无')"
-    else
-        echo "acme.sh未安装"
-    fi
+   # 检查acme.sh安装
+   echo -e "\nacme.sh检查："
+   if [ -f ~/.acme.sh/acme.sh ]; then
+       echo "acme.sh版本: $($HOME/.acme.sh/acme.sh --version 2>&1 | head -n 1)"
+       echo "已配置域名: $($HOME/.acme.sh/acme.sh --list 2>/dev/null | grep -v "^Looking" || echo '无')"
+   else
+       echo "acme.sh未安装"
+   fi
 
-    # 查看证书日志
-    echo -e "\n证书日志 (最近20行)："
-    echo "---------------------------------------------------"
-    if [ -f "/var/log/acme.sh.log" ]; then
-        tail -n 20 /var/log/acme.sh.log
-    else
-        echo "证书日志文件不存在"
-    fi
-    
-    # 证书状态
-    if [ -n "$domain" ]; then
-        echo -e "\n证书文件检查："
-        local cert_files=(/etc/haproxy/certs/${domain}.*)
-        if [ -e "${cert_files[0]}" ]; then
-            ls -l /etc/haproxy/certs/${domain}.*
-            if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
-                echo -e "\n证书有效期："
-                openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -dates
-                echo -e "\n证书验证："
-                if openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
-                    echo -e "${GREEN}证书有效${PLAIN}"
-                else
-                    echo -e "${RED}证书已过期${PLAIN}"
-                fi
-            fi
-        else
-            echo "未找到证书文件"
-        fi
-    fi
+   # 查看证书日志
+   echo -e "\n证书日志 (最近20行)："
+   echo "---------------------------------------------------"
+   # 检查所有可能的日志位置
+   local log_files=(
+       "/var/log/acme.sh.log"
+       "~/.acme.sh/acme.sh.log"
+       "~/.acme.sh/*.log"
+       "/root/.acme.sh/acme.sh.log"
+       "/root/.acme.sh/*.log"
+   )
+   
+   local found_logs=0
+   for log_file in "${log_files[@]}"; do
+       if [ -f "$(eval echo $log_file)" ]; then
+           echo "发现日志文件: $(eval echo $log_file)"
+           echo "------------------------"
+           tail -n 20 "$(eval echo $log_file)"
+           echo "------------------------"
+           found_logs=1
+       fi
+   done
+   
+   if [ $found_logs -eq 0 ]; then
+       echo "未找到任何证书日志文件"
+   fi
+   
+   # 证书状态
+   if [ -n "$domain" ]; then
+       echo -e "\n证书文件检查："
+       local cert_files=(/etc/haproxy/certs/${domain}.*)
+       if [ -e "${cert_files[0]}" ]; then
+           ls -l /etc/haproxy/certs/${domain}.*
+           if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
+               echo -e "\n证书有效期："
+               openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -dates
+               echo -e "\n证书验证："
+               if openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
+                   echo -e "${GREEN}证书有效${PLAIN}"
+               else
+                   echo -e "${RED}证书已过期${PLAIN}"
+               fi
+           fi
+       else
+           echo "未找到证书文件"
+       fi
+   fi
 
-    # 环境诊断
-    echo -e "\n环境诊断："
-    echo "---------------------------------------------------"
-    echo "操作系统: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
-    echo "内核版本: $(uname -r)"
-    echo "OpenSSL版本: $(openssl version)"
-    echo "Nginx版本: $(nginx -v 2>&1)"
-    echo "防火墙状态: $(ufw status | grep Status)"
-    
-    # 显示诊断建议
-    if [ -f "/var/log/acme.sh.log" ]; then
-        if grep -q "error" "/var/log/acme.sh.log"; then
-            echo -e "\n${YELLOW}发现可能的问题：${PLAIN}"
-            if grep -q "Verify error" "/var/log/acme.sh.log"; then
-                echo "1. 域名验证失败，请检查域名解析是否正确"
-                echo "2. 确保80端口未被占用"
-            fi
-            if grep -q "connection refused" "/var/log/acme.sh.log"; then
-                echo "3. 连接被拒绝，请检查防火墙设置"
-            fi
-            if grep -q "timeout" "/var/log/acme.sh.log"; then
-                echo "4. 连接超时，可能是网络问题"
-            fi
-        fi
-    fi
-    
-    echo "==================================================="
-    echo "提示：如需重新申请证书，请选择'申请SSL证书'选项"
+   # 环境诊断
+   echo -e "\n环境诊断："
+   echo "---------------------------------------------------"
+   echo "操作系统: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
+   echo "内核版本: $(uname -r)"
+   echo "OpenSSL版本: $(openssl version)"
+   if command -v nginx >/dev/null 2>&1; then
+       echo "Nginx版本: $(nginx -v 2>&1)"
+   else
+       echo "Nginx: 未安装"
+   fi
+   echo "防火墙状态: $(ufw status | grep Status)"
+   
+   # 检查常见问题并显示诊断建议
+   echo -e "\n诊断建议："
+   local problems=0
+   
+   # 检查域名解析
+   if [ -n "$domain" ]; then
+       local domain_ip=$(dig +short ${domain})
+       local server_ip=$(curl -s ifconfig.me)
+       if [ "$domain_ip" != "$server_ip" ]; then
+           echo "- 域名解析IP(${domain_ip})与服务器IP(${server_ip})不匹配"
+           problems=1
+       fi
+   fi
+   
+   # 检查80端口
+   if ss -tuln | grep -q ':80 '; then
+       echo "- 80端口被占用，可能影响证书申请"
+       problems=1
+   fi
+   
+   # 检查日志中的错误
+   for log_file in "${log_files[@]}"; do
+       if [ -f "$(eval echo $log_file)" ]; then
+           if grep -q "error" "$(eval echo $log_file)"; then
+               echo "- 日志中发现错误:"
+               if grep -q "Verify error" "$(eval echo $log_file)"; then
+                   echo "  * 域名验证失败，请检查域名解析是否正确"
+                   problems=1
+               fi
+               if grep -q "connection refused" "$(eval echo $log_file)"; then
+                   echo "  * 连接被拒绝，请检查防火墙设置"
+                   problems=1
+               fi
+               if grep -q "timeout" "$(eval echo $log_file)"; then
+                   echo "  * 连接超时，可能是网络问题"
+                   problems=1
+               fi
+           fi
+       fi
+   done
+   
+   if [ $problems -eq 0 ]; then
+       echo "未发现明显问题"
+   fi
+   
+   echo "==================================================="
+   echo "提示："
+   echo "1. 如需重新申请证书，请选择'申请SSL证书'选项"
+   echo "2. 确保域名已正确解析到服务器IP"
+   echo "3. 确保80端口未被占用"
+   echo "4. 如遇问题可尝试先卸载再重新安装"
 }
 
 # 主函数
