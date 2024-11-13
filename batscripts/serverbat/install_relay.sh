@@ -332,19 +332,60 @@ install_cert() {
        return 1
    fi
 
+   # 创建日志文件
+    touch /var/log/acme.sh.log
+    chmod 644 /var/log/acme.sh.log
+
    # 安装 acme.sh
-   if [ ! -f ~/.acme.sh/acme.sh ]; then
-       log "INFO" "安装 acme.sh..."
-       curl -fsSL https://get.acme.sh | sh -s email=admin@${domain}
-       if [ $? -ne 0 ]; then
-           log "ERROR" "acme.sh 安装失败"
-           return 1
-       fi
-       source ~/.bashrc
-   else
-       log "INFO" "acme.sh 已安装，尝试更新..."
-       ~/.acme.sh/acme.sh --upgrade
-   fi
+    log "INFO" "安装 acme.sh..."
+    if [ ! -f ~/.acme.sh/acme.sh ]; then
+        # 先下载安装脚本到本地
+        log "INFO" "下载 acme.sh 安装脚本..."
+        if ! curl -sL https://get.acme.sh > /tmp/acme.sh.sh; then
+            log "ERROR" "下载 acme.sh 失败"
+            return 1
+        fi
+        
+        # 检查下载的文件
+        if [ ! -s /tmp/acme.sh.sh ]; then
+            log "ERROR" "acme.sh 安装脚本下载不完整"
+            return 1
+        fi
+        
+        # 安装
+        log "INFO" "执行 acme.sh 安装..."
+        chmod +x /tmp/acme.sh.sh
+        if ! bash /tmp/acme.sh.sh --install --log /var/log/acme.sh.log; then
+            log "ERROR" "acme.sh 安装失败"
+            return 1
+        fi
+        
+        # 清理临时文件
+        rm -f /tmp/acme.sh.sh
+        
+        # 重新加载 shell 配置
+        source ~/.bashrc
+    else
+        log "INFO" "acme.sh 已安装，尝试更新..."
+        ~/.acme.sh/acme.sh --upgrade --auto-upgrade
+    fi
+
+    # 验证安装
+    if [ ! -f ~/.acme.sh/acme.sh ]; then
+        log "ERROR" "acme.sh 安装验证失败"
+        return 1
+    fi
+
+    # 配置 acme.sh
+    log "INFO" "配置 acme.sh..."
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    
+    # 验证网络连接
+    log "INFO" "验证网络连接..."
+    if ! curl -sL --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory >/dev/null; then
+        log "ERROR" "无法连接到 Let's Encrypt 服务器，请检查网络"
+        return 1
+    fi
 
    # 申请证书
    log "INFO" "申请SSL证书..."
