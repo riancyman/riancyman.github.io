@@ -1268,41 +1268,118 @@ show_menu() {
 
 # 查看证书日志
 view_cert_log() {
-    echo "====================== 证书日志 ======================"
-    if [ -f "/var/log/acme.sh.log" ]; then
-        echo "最近50行日志："
-        echo "---------------------------------------------------"
-        tail -n 50 /var/log/acme.sh.log
-        echo "---------------------------------------------------"
-        echo "完整日志文件路径：/var/log/acme.sh.log"
-    else
-        log "INFO" "证书日志文件不存在，可能还未申请过证书"
-    fi
+    S
+[Wed Nov 13 08:55:26 AM CST 2024] response='{"type":"http-01","url":"https://acme.zerossl.com/v2/DV90/chall/F7l9cDEsmcE1pkk3Gcn-rg","status":"processing","token":"T-PDy-RwVvXmcLtg1PFkEBHJnoZGCzwZ1yYFPH_f87I"}'
+[Wed Nov 13 08:55:27 AM CST 2024] Diagnosis versions: 
+openssl:openssl
+OpenSSL 3.0.15 3 Sep 2024 (Library: OpenSSL 3.0.15 3 Sep 2024)
+Apache:
+Apache doesn't exist.
+nginx:
+nginx version: nginx/1.22.1
+built with OpenSSL 3.0.8 7 Feb 2023 (running with OpenSSL 3.0.15 3 Sep 2024)
+TLS SNI support enabled
+configure arguments: --with-cc-opt='-g -O2 -ffile-prefix-map=/build/nginx-AoTv4W/nginx-1.22.1=. -fstack-protector-strong -Wformat -Werror=format-security -fPIC -Wdate-time -D_FORTIFY_SOURCE=2' --with-ld-opt='-Wl,-z,relro -Wl,-z,now -fPIC' --prefix=/usr/share/nginx --conf-path=/etc/nginx/nginx.conf --http-log-path=/var/log/nginx/access.log --error-log-path=stderr --lock-path=/var/lock/nginx.lock --pid-path=/run/nginx.pid --modules-path=/usr/lib/nginx/modules --http-client-body-temp-path=/var/lib/nginx/body --http-fastcgi-temp-path=/var/lib/nginx/fastcgi --http-proxy-temp-path=/var/lib/nginx/proxy --http-scgi-temp-path=/var/lib/nginx/scgi --http-uwsgi-temp-path=/var/lib/nginx/uwsgi --with-compat --with-debug --with-pcre-jit --with-http_ssl_module --with-http_stub_status_module --with-http_realip_module --with-http_auth_request_module --with-http_v2_module --with-http_dav_module --with-http_slice_module --with-threads --with-http_addition_module --with-http_flv_module --with-http_gunzip_module --with-http_gzip_static_module --with-http_mp4_module --with-http_random_index_module --with-http_secure_link_module --with-http_sub_module --with-mail_ssl_module --with-stream_ssl_module --with-stream_ssl_preread_module --with-stream_realip_module --with-http_geoip_module=dynamic --with-http_image_filter_module=dynamic --with-http_perl_module=dynamic --with-http_xslt_module=dynamic --with-mail=dynamic --with-stream=dynamic --with-stream_geoip_module=dynamic
+socat:
+socat by Gerhard Rieger and contributors - see www.dest-unreach.org
+socat version 1.7.4.4 on 06 Nov 2022 08:15:51
+   running on Linux version #1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2024-08-26), release 6.1.0-25-amd64, machine x86_64
+
+
+我看到问题了，似乎是证书申请过程中的响应问题。让我修改 view_cert_log 函数，加入更多诊断信息：
+
+bash
+
+Copy
+# 查看证书日志和诊断信息
+view_cert_log() {
+    echo "====================== 证书诊断信息 ======================"
     
-    # 检查证书状态
+    # 检查域名解析
     local domain=$(get_status DOMAIN_NAME)
     if [ -n "$domain" ]; then
-        echo -e "\n当前证书状态："
-        if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
-            echo "证书信息："
-            openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -text | grep -E "Not (Before|After)"
-            echo "证书验证："
-            if openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
-                echo -e "${GREEN}证书有效${PLAIN}"
-            else
-                echo -e "${RED}证书已过期${PLAIN}"
+        echo -e "\n域名解析检查："
+        echo "域名: $domain"
+        echo "解析IP: $(dig +short ${domain})"
+        echo "服务器IP: $(curl -s ifconfig.me)"
+    fi
+
+    # 检查端口状态
+    echo -e "\n端口状态检查："
+    ss -tuln | grep -E ':(80|443)' || echo "80和443端口都未被占用"
+
+    # 检查服务状态
+    echo -e "\n服务状态检查："
+    echo "Nginx状态: $(systemctl is-active nginx 2>/dev/null || echo '未安装')"
+    echo "HAProxy状态: $(systemctl is-active haproxy 2>/dev/null || echo '未安装')"
+
+    # 检查acme.sh安装
+    echo -e "\nacme.sh检查："
+    if [ -f ~/.acme.sh/acme.sh ]; then
+        echo "acme.sh版本: $($HOME/.acme.sh/acme.sh --version 2>&1 | head -n 1)"
+        echo "已配置域名: $($HOME/.acme.sh/acme.sh --list 2>/dev/null | grep -v "^Looking" || echo '无')"
+    else
+        echo "acme.sh未安装"
+    fi
+
+    # 查看证书日志
+    echo -e "\n证书日志 (最近20行)："
+    echo "---------------------------------------------------"
+    if [ -f "/var/log/acme.sh.log" ]; then
+        tail -n 20 /var/log/acme.sh.log
+    else
+        echo "证书日志文件不存在"
+    fi
+    
+    # 证书状态
+    if [ -n "$domain" ]; then
+        echo -e "\n证书文件检查："
+        local cert_files=(/etc/haproxy/certs/${domain}.*)
+        if [ -e "${cert_files[0]}" ]; then
+            ls -l /etc/haproxy/certs/${domain}.*
+            if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
+                echo -e "\n证书有效期："
+                openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -dates
+                echo -e "\n证书验证："
+                if openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
+                    echo -e "${GREEN}证书有效${PLAIN}"
+                else
+                    echo -e "${RED}证书已过期${PLAIN}"
+                fi
             fi
         else
             echo "未找到证书文件"
         fi
-        
-        # 检查自动更新配置
-        if [ -f ~/.acme.sh/acme.sh ]; then
-            echo -e "\n自动更新配置："
-            ~/.acme.sh/acme.sh --list | grep ${domain}
+    fi
+
+    # 环境诊断
+    echo -e "\n环境诊断："
+    echo "---------------------------------------------------"
+    echo "操作系统: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)"
+    echo "内核版本: $(uname -r)"
+    echo "OpenSSL版本: $(openssl version)"
+    echo "Nginx版本: $(nginx -v 2>&1)"
+    echo "防火墙状态: $(ufw status | grep Status)"
+    
+    # 显示诊断建议
+    if [ -f "/var/log/acme.sh.log" ]; then
+        if grep -q "error" "/var/log/acme.sh.log"; then
+            echo -e "\n${YELLOW}发现可能的问题：${PLAIN}"
+            if grep -q "Verify error" "/var/log/acme.sh.log"; then
+                echo "1. 域名验证失败，请检查域名解析是否正确"
+                echo "2. 确保80端口未被占用"
+            fi
+            if grep -q "connection refused" "/var/log/acme.sh.log"; then
+                echo "3. 连接被拒绝，请检查防火墙设置"
+            fi
+            if grep -q "timeout" "/var/log/acme.sh.log"; then
+                echo "4. 连接超时，可能是网络问题"
+            fi
         fi
     fi
+    
     echo "==================================================="
+    echo "提示：如需重新申请证书，请选择'申请SSL证书'选项"
 }
 
 # 主函数
