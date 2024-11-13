@@ -148,20 +148,47 @@ net.ipv4.tcp_window_scaling = 1
 EOF
     
     # 应用系统参数
-    if ! sysctl -p; then
+    if ! sysctl -p /etc/sysctl.d/99-custom.conf; then
         log "WARNING" "系统参数设置可能未完全生效"
     fi
     
     # 设置时区
     log "INFO" "设置系统时区..."
-    timedatectl set-timezone Asia/Shanghai
+    if ! timedatectl set-timezone Asia/Shanghai; then
+        log "ERROR" "时区设置失败"
+        return 1
+    fi
     
-    # 所有检查通过，设置状态并返回
-    if set_status SYSTEM_PREPARED 1; then
-        log "SUCCESS" "系统环境准备完成"
-        return 0
+    # 验证所有配置
+    local check_status=0
+    
+    # 检查时区
+    if [ "$(timedatectl show --property=Timezone --value)" != "Asia/Shanghai" ]; then
+        log "ERROR" "时区设置验证失败"
+        check_status=1
+    fi
+    
+    # 检查系统参数
+    if ! sysctl net.ipv4.tcp_fastopen >/dev/null 2>&1; then
+        log "ERROR" "系统参数设置验证失败"
+        check_status=1
+    fi
+    
+    # 如果所有检查都通过，设置状态
+    if [ $check_status -eq 0 ]; then
+        # 确保状态目录存在
+        mkdir -p "$INSTALL_STATUS_DIR"
+        chmod 700 "$INSTALL_STATUS_DIR"
+        
+        if set_status SYSTEM_PREPARED 1; then
+            log "SUCCESS" "系统环境准备完成"
+            return 0
+        else
+            log "ERROR" "状态设置失败"
+            return 1
+        fi
     else
-        log "ERROR" "状态设置失败"
+        log "ERROR" "系统环境准备失败"
         return 1
     fi
 }
