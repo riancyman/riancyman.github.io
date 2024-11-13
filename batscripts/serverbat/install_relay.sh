@@ -229,6 +229,17 @@ install_cert() {
     chmod 600 /etc/haproxy/certs/${domain}.pem.combined
     chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined
 
+    # 验证证书 【新增的验证部分】
+    if [ -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
+        if ! openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
+            log "ERROR" "证书无效或已过期"
+            return 1
+        fi
+    else
+        log "ERROR" "证书文件不存在"
+        return 1
+    fi
+
     # 配置证书自动更新
     ~/.acme.sh/acme.sh --install-cert -d ${domain} \
         --key-file /etc/haproxy/certs/${domain}.key \
@@ -260,9 +271,25 @@ configure_nginx() {
             log "ERROR" "域名不能为空"
             return 1
         fi
-        set_status DOMAIN_NAME "$domain"
     fi
+
+    # 确保配置目录存在
+    mkdir -p /etc/nginx/conf.d
     
+    # 配置Nginx
+    cat > /etc/nginx/conf.d/default.conf << EOF
+server {
+    listen 80;
+    server_name ${domain};
+    root /var/www/html;
+    index index.html;
+    
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
     # 配置伪装站点
     echo "请选择伪装站点类型："
     echo "1. 个人博客"
@@ -415,19 +442,63 @@ EOF
             ;;
     esac
 
-    # 设置目录权限
+    # 设置目录和权限
+    mkdir -p /var/www/html
     chown -R www-data:www-data /var/www/html
     chmod -R 755 /var/www/html
     
+    # 保存域名到状态文件
+    if ! set_status DOMAIN_NAME "${domain}"; then
+        log "ERROR" "保存域名配置失败"
+        return 1
+    fi
+    
+    # 检查Nginx配置语法
+    if ! nginx -t; then
+        log "ERROR" "Nginx配置检查失败"
+        return 1
+    fi
+    
     # 重启Nginx
     systemctl restart nginx
+    sleep 2  # 等待服务启动
     
-    if systemctl is-active --quiet nginx; then
-        set_status NGINX_INSTALLED 1
-        log "SUCCESS" "Nginx伪装站点配置完成"
-        return 0
+    # 全面检查Nginx状态
+    local nginx_status=0
+    # 检查服务是否运行
+    if ! systemctl is-active --quiet nginx; then
+        log "ERROR" "Nginx服务未运行"
+        nginx_status=1
+    fi
+    
+    # 检查配置文件是否存在
+    if [ ! -f "/etc/nginx/conf.d/default.conf" ]; then
+        log "ERROR" "Nginx配置文件不存在"
+        nginx_status=1
+    fi
+    
+    # 检查网站文件是否存在
+    if [ ! -f "/var/www/html/index.html" ]; then
+        log "ERROR" "网站文件不存在"
+        nginx_status=1
+    fi
+    
+    # 检查80端口是否在监听
+    if ! ss -tuln | grep -q ':80 '; then
+        log "ERROR" "80端口未监听"
+        nginx_status=1
+    fi
+    
+    if [ $nginx_status -eq 0 ]; then
+        if set_status NGINX_INSTALLED 1; then
+            log "SUCCESS" "Nginx伪装站点配置完成"
+            return 0
+        else
+            log "ERROR" "状态保存失败"
+            return 1
+        fi
     else
-        log "ERROR" "Nginx启动失败"
+        log "ERROR" "Nginx配置失败"
         return 1
     fi
 }
@@ -459,9 +530,42 @@ install_haproxy() {
     mkdir -p /etc/haproxy/certs
     chmod 700 /etc/haproxy/certs
 
-    set_status HAPROXY_INSTALLED 1
-    log "SUCCESS" "HAProxy 安装完成"
-    return 0
+    # 验证安装
+    if ! command -v haproxy >/dev/null 2>&1; then
+        log "ERROR" "HAProxy未正确安装"
+        return 1
+    fi
+
+    # 验证版本
+    local version=$(haproxy -v 2>&1 | head -n1)
+    log "INFO" "HAProxy版本: $version"
+
+    # 验证服务状态
+    if ! systemctl is-enabled haproxy >/dev/null 2>&1; then
+        log "ERROR" "HAProxy服务未启用"
+        return 1
+    fi
+
+    # 验证配置目录
+    if [ ! -d "/etc/haproxy" ]; then
+        log "ERROR" "HAProxy配置目录不存在"
+        return 1
+    fi
+
+    # 验证证书目录权限
+    if [ ! -d "/etc/haproxy/certs" ] || [ "$(stat -c '%a' /etc/haproxy/certs)" != "700" ]; then
+        log "ERROR" "证书目录权限配置错误"
+        return 1
+    fi
+
+    # 所有检查通过后设置状态
+    if set_status HAPROXY_INSTALLED 1; then
+        log "SUCCESS" "HAProxy 安装完成"
+        return 0
+    else
+        log "ERROR" "状态设置失败"
+        return 1
+    fi
 }
 
 # 配置端口转发
@@ -575,11 +679,25 @@ EOF
         listen_ports="${listen_ports}${listen_port},"
     done
 
+    if [ -z "$stats_user" ] || [ -z "$stats_pass" ]; then
+        log "ERROR" "状态页面认证信息配置失败"
+        return 1
+    fi
+
     # 保存配置信息
     set_status STATS_USER "${stats_user}"
     set_status STATS_PASS "${stats_pass}"
     set_status UPSTREAM_SERVERS "${upstream_servers%,}"
     set_status LISTEN_PORTS "${listen_ports%,}"
+
+    # 验证配置是否成功保存
+    if [ "$(get_status STATS_USER)" != "$stats_user" ] || \
+       [ "$(get_status STATS_PASS)" != "$stats_pass" ] || \
+       [ "$(get_status UPSTREAM_SERVERS)" != "${upstream_servers%,}" ] || \
+       [ "$(get_status LISTEN_PORTS)" != "${listen_ports%,}" ]; then
+        log "ERROR" "配置信息保存失败"
+        return 1
+    fi
     
     # 检查配置语法
     if ! haproxy -c -f /etc/haproxy/haproxy.cfg; then
@@ -590,13 +708,38 @@ EOF
     
     # 重启服务
     systemctl restart haproxy
+
+    sleep 2  # 等待服务启动
     
-    if systemctl is-active --quiet haproxy; then
+    # 检查服务状态和端口
+    if ! systemctl is-active --quiet haproxy; then
+        log "ERROR" "HAProxy 重启失败"
+        return 1
+    fi
+
+    # 检查端口是否正在监听
+    local listen_status=0
+    IFS=',' read -ra PORTS <<< "${listen_ports%,}"
+    for port in "${PORTS[@]}"; do
+        if ! ss -tuln | grep -q ":${port} "; then
+            log "ERROR" "端口 ${port} 未正常监听"
+            listen_status=1
+            break
+        fi
+    done
+
+    # 检查状态页面端口
+    if ! ss -tuln | grep -q ":10086 "; then
+        log "ERROR" "状态页面端口 10086 未正常监听"
+        listen_status=1
+    fi
+
+    if [ $listen_status -eq 0 ]; then
         set_status MULTI_PORT_CONFIGURED 1
         log "SUCCESS" "端口转发配置完成"
         return 0
     else
-        log "ERROR" "HAProxy 重启失败"
+        log "ERROR" "端口配置失败"
         return 1
     fi
 }
@@ -638,7 +781,45 @@ configure_ufw() {
     # 启用UFW
     echo "y" | ufw enable
     
-    if ufw status | grep -q "Status: active"; then
+    # 验证UFW状态和端口配置 【新增的验证部分】
+    if ! ufw status | grep -q "Status: active"; then
+        log "ERROR" "UFW 未成功启用"
+        return 1
+    fi
+
+    # 验证SSH端口
+    if ! ufw status | grep -q "${ssh_port}/tcp"; then
+        log "ERROR" "SSH端口 ${ssh_port} 配置失败"
+        return 1
+    fi
+
+    # 验证HTTP和HTTPS端口
+    if ! ufw status | grep -q "80/tcp" || ! ufw status | grep -q "443/tcp"; then
+        log "ERROR" "Web端口配置失败"
+        return 1
+    fi
+
+    # 验证HAProxy端口
+    local port_status=0
+    local listen_ports=$(get_status LISTEN_PORTS)
+    IFS=',' read -ra PORTS <<< "$listen_ports"
+    for port in "${PORTS[@]}"; do
+        if [ -n "$port" ]; then
+            if ! ufw status | grep -q "$port/tcp"; then
+                log "ERROR" "端口 $port 配置失败"
+                port_status=1
+                break
+            fi
+        fi
+    done
+
+    # 验证状态页面端口
+    if ! ufw status | grep -q "10086/tcp"; then
+        log "ERROR" "状态页面端口配置失败"
+        port_status=1
+    fi
+
+    if [ $port_status -eq 0 ]; then
         set_status UFW_CONFIGURED 1
         log "SUCCESS" "UFW 防火墙配置完成"
         return 0
