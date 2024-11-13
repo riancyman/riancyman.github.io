@@ -1494,7 +1494,7 @@ main() {
     # 主循环
     while true; do
         show_menu
-        read -p "请选择操作[0-11]: " choice
+        read -p "请选择操作[0-12]: " choice
         case "${choice}" in
             0) exit 0 ;;
             1) check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system ;;
