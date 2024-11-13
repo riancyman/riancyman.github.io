@@ -1266,31 +1266,6 @@ show_menu() {
     echo "=========================================="
 }
 
-# 查看证书日志
-view_cert_log() {
-    S
-[Wed Nov 13 08:55:26 AM CST 2024] response='{"type":"http-01","url":"https://acme.zerossl.com/v2/DV90/chall/F7l9cDEsmcE1pkk3Gcn-rg","status":"processing","token":"T-PDy-RwVvXmcLtg1PFkEBHJnoZGCzwZ1yYFPH_f87I"}'
-[Wed Nov 13 08:55:27 AM CST 2024] Diagnosis versions: 
-openssl:openssl
-OpenSSL 3.0.15 3 Sep 2024 (Library: OpenSSL 3.0.15 3 Sep 2024)
-Apache:
-Apache doesn't exist.
-nginx:
-nginx version: nginx/1.22.1
-built with OpenSSL 3.0.8 7 Feb 2023 (running with OpenSSL 3.0.15 3 Sep 2024)
-TLS SNI support enabled
-configure arguments: --with-cc-opt='-g -O2 -ffile-prefix-map=/build/nginx-AoTv4W/nginx-1.22.1=. -fstack-protector-strong -Wformat -Werror=format-security -fPIC -Wdate-time -D_FORTIFY_SOURCE=2' --with-ld-opt='-Wl,-z,relro -Wl,-z,now -fPIC' --prefix=/usr/share/nginx --conf-path=/etc/nginx/nginx.conf --http-log-path=/var/log/nginx/access.log --error-log-path=stderr --lock-path=/var/lock/nginx.lock --pid-path=/run/nginx.pid --modules-path=/usr/lib/nginx/modules --http-client-body-temp-path=/var/lib/nginx/body --http-fastcgi-temp-path=/var/lib/nginx/fastcgi --http-proxy-temp-path=/var/lib/nginx/proxy --http-scgi-temp-path=/var/lib/nginx/scgi --http-uwsgi-temp-path=/var/lib/nginx/uwsgi --with-compat --with-debug --with-pcre-jit --with-http_ssl_module --with-http_stub_status_module --with-http_realip_module --with-http_auth_request_module --with-http_v2_module --with-http_dav_module --with-http_slice_module --with-threads --with-http_addition_module --with-http_flv_module --with-http_gunzip_module --with-http_gzip_static_module --with-http_mp4_module --with-http_random_index_module --with-http_secure_link_module --with-http_sub_module --with-mail_ssl_module --with-stream_ssl_module --with-stream_ssl_preread_module --with-stream_realip_module --with-http_geoip_module=dynamic --with-http_image_filter_module=dynamic --with-http_perl_module=dynamic --with-http_xslt_module=dynamic --with-mail=dynamic --with-stream=dynamic --with-stream_geoip_module=dynamic
-socat:
-socat by Gerhard Rieger and contributors - see www.dest-unreach.org
-socat version 1.7.4.4 on 06 Nov 2022 08:15:51
-   running on Linux version #1 SMP PREEMPT_DYNAMIC Debian 6.1.106-3 (2024-08-26), release 6.1.0-25-amd64, machine x86_64
-
-
-我看到问题了，似乎是证书申请过程中的响应问题。让我修改 view_cert_log 函数，加入更多诊断信息：
-
-bash
-
-Copy
 # 查看证书日志和诊断信息
 view_cert_log() {
     echo "====================== 证书诊断信息 ======================"
