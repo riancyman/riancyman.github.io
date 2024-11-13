@@ -275,6 +275,78 @@ configure_nginx() {
 
     # 确保配置目录存在
     mkdir -p /etc/nginx/conf.d
+    mkdir -p /var/log/nginx
+
+        # 创建 nginx.conf 主配置文件
+    cat > /etc/nginx/nginx.conf << 'EOF'
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 768;
+    multi_accept on;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    gzip on;
+    gzip_disable "msie6";
+
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
+
+    # 创建 mime.types 文件
+    cat > /etc/nginx/mime.types << 'EOF'
+types {
+    text/html                             html htm shtml;
+    text/css                              css;
+    text/xml                              xml;
+    image/gif                             gif;
+    image/jpeg                            jpeg jpg;
+    application/javascript                js;
+    application/atom+xml                  atom;
+    application/rss+xml                   rss;
+
+    image/png                             png;
+    image/svg+xml                         svg svgz;
+    image/tiff                            tif tiff;
+    image/x-icon                          ico;
+    image/x-jng                           jng;
+    image/webp                            webp;
+
+    application/json                      json;
+    application/pdf                       pdf;
+    application/zip                       zip;
+
+    audio/midi                            mid midi kar;
+    audio/mpeg                            mp3;
+    audio/ogg                             ogg;
+    audio/x-m4a                           m4a;
+
+    video/mp4                             mp4;
+    video/mpeg                            mpeg mpg;
+    video/webm                            webm;
+    video/x-flv                           flv;
+}
+EOF
+
+    # 创建日志目录
+    mkdir -p /var/log/nginx
+    chown -R www-data:www-data /var/log/nginx
     
     # 配置Nginx
     cat > /etc/nginx/conf.d/default.conf << EOF
