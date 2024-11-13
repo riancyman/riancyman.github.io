@@ -1208,29 +1208,83 @@ uninstall_all() {
     fi
     
     # 停止服务
-    systemctl stop nginx haproxy
-    systemctl disable nginx haproxy
+    if systemctl is-active --quiet nginx; then
+        log "INFO" "停止Nginx服务..."
+        systemctl stop nginx
+    fi
+    
+    if systemctl is-active --quiet haproxy; then
+        log "INFO" "停止HAProxy服务..."
+        systemctl stop haproxy
+    fi
+    
+    # 禁用服务
+    if systemctl is-enabled --quiet nginx; then
+        log "INFO" "禁用Nginx服务..."
+        systemctl disable nginx
+    fi
+    
+    if systemctl is-enabled --quiet haproxy; then
+        log "INFO" "禁用HAProxy服务..."
+        systemctl disable haproxy
+    fi
     
     # 卸载软件包
-    apt remove --purge -y nginx haproxy
+    log "INFO" "卸载软件包..."
+    if dpkg -l | grep -q nginx; then
+        apt remove --purge -y nginx nginx-common
+    else
+        log "INFO" "Nginx未安装，跳过卸载"
+    fi
+    
+    if dpkg -l | grep -q haproxy; then
+        apt remove --purge -y haproxy
+    else
+        log "INFO" "HAProxy未安装，跳过卸载"
+    fi
     
     # 清理证书
     if [ -d ~/.acme.sh ]; then
+        log "INFO" "清理acme.sh..."
         ~/.acme.sh/acme.sh --uninstall
         rm -rf ~/.acme.sh
     fi
     
-    # 清理配置文件
+    # 清理配置文件和日志
+    log "INFO" "清理配置文件和日志..."
     rm -rf /etc/nginx
     rm -rf /etc/haproxy
     rm -rf $INSTALL_STATUS_DIR
     rm -rf /var/www/html/*
+    rm -f /var/log/acme.sh.log
     
     # 重置防火墙
-    ufw --force reset
-    ufw disable
+    log "INFO" "重置防火墙..."
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force reset
+        ufw disable
+    fi
+    
+    # 清理系统参数（如果之前设置过）
+    if [ -f "/etc/sysctl.d/99-custom.conf" ]; then
+        log "INFO" "清理系统参数..."
+        rm -f /etc/sysctl.d/99-custom.conf
+        sysctl --system
+    fi
+    
+    # 提示是否需要清理未使用的依赖
+    log "INFO" "检查未使用的依赖..."
+    apt autoremove -y
     
     log "SUCCESS" "卸载完成"
+    
+    # 询问是否需要重启
+    read -p "是否需要重启系统来完成清理？[y/N] " reboot_answer
+    if [[ "${reboot_answer,,}" == "y" ]]; then
+        log "INFO" "系统将在3秒后重启..."
+        sleep 3
+        reboot
+    fi
 }
 
 # 检查是否需要重新安装
