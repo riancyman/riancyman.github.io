@@ -289,13 +289,34 @@ install_cert() {
    # 检查并停止相关服务
    log "INFO" "检查并停止相关服务..."
    
-   # 检查Nginx
-   if systemctl is-enabled nginx >/dev/null 2>&1; then
-       log "INFO" "停止Nginx服务..."
-       systemctl stop nginx
-   else
-       log "INFO" "Nginx服务未安装，跳过"
-   fi
+   # 检查并停止Nginx
+    if systemctl is-enabled nginx >/dev/null 2>&1; then
+        log "INFO" "停止Nginx服务..."
+        if ! systemctl stop nginx; then
+            log "WARNING" "通过systemctl停止Nginx失败，尝试强制停止..."
+            pkill -f nginx
+        fi
+        
+        # 验证Nginx是否真的停止了
+        if pgrep -f nginx >/dev/null; then
+            log "ERROR" "无法停止Nginx服务"
+            return 1
+        else
+            log "INFO" "Nginx服务已停止"
+        fi
+    else
+        log "INFO" "Nginx服务未安装，跳过"
+    fi
+
+    # 确保80端口真的释放了
+    sleep 2  # 等待端口完全释放
+    if ss -tuln | grep -q ':80 '; then
+        log "ERROR" "80端口仍被占用，检查占用进程..."
+        lsof -i :80
+        return 1
+    else
+        log "INFO" "80端口已释放"
+    fi
    
    # 检查HAProxy
    if systemctl is-enabled haproxy >/dev/null 2>&1; then
