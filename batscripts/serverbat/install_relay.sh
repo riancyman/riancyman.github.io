@@ -85,54 +85,64 @@ check_port() {
 
 # 系统环境准备
 prepare_system() {
-    log "INFO" "准备系统环境..."
-    
-    # 预先配置 kexec-tools
-    echo 'LOAD_KEXEC=false' > /etc/default/kexec
-    
-    # 设置非交互模式
-    export DEBIAN_FRONTEND=noninteractive
-    
-    # 更新系统
-    log "INFO" "更新系统..."
-    if ! apt-get update; then
-        log "ERROR" "系统更新失败"
-        return 1
-    fi
-    
-    # 更新软件包
-    log "INFO" "更新软件包..."
-    if ! apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade; then
-        log "ERROR" "软件包更新失败"
-        return 1
-    fi
-    
-    # 安装基础包
-    log "INFO" "安装基础软件包..."
-    if ! apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
-        curl wget unzip ufw socat nginx python3; then
-        log "ERROR" "基础软件包安装失败"
-        return 1
-    fi
-    
-    # 验证必要软件是否安装成功
-    local required_packages=("curl" "wget" "unzip" "ufw" "socat" "nginx" "python3")
-    local missing_packages=()
-    
-    for pkg in "${required_packages[@]}"; do
-        if ! command -v $pkg >/dev/null 2>&1; then
-            missing_packages+=($pkg)
-        fi
-    done
-    
-    if [ ${#missing_packages[@]} -ne 0 ]; then
-        log "ERROR" "以下软件包安装失败: ${missing_packages[*]}"
-        return 1
-    fi
-    
-    # 设置系统优化参数
-    log "INFO" "设置系统参数..."
-    cat >> /etc/sysctl.conf << EOF
+   log "INFO" "准备系统环境..."
+   
+   # 预先配置 kexec-tools
+   echo 'LOAD_KEXEC=false' > /etc/default/kexec
+   
+   # 设置非交互模式
+   export DEBIAN_FRONTEND=noninteractive
+   
+   # 更新系统
+   log "INFO" "更新系统..."
+   if ! apt-get update; then
+       log "ERROR" "系统更新失败"
+       return 1
+   fi
+   
+   # 更新软件包
+   log "INFO" "更新软件包..."
+   if ! apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade; then
+       log "ERROR" "软件包更新失败"
+       return 1
+   fi
+   
+   # 安装基础包
+   log "INFO" "安装基础软件包..."
+   if ! apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
+       curl wget unzip ufw socat nginx python3; then
+       log "ERROR" "基础软件包安装失败"
+       return 1
+   fi
+   
+   # 验证必要软件是否安装成功
+   local required_packages=("curl" "wget" "unzip" "ufw" "socat" "nginx" "python3")
+   local missing_packages=()
+   
+   for pkg in "${required_packages[@]}"; do
+       if ! command -v $pkg >/dev/null 2>&1; then
+           missing_packages+=($pkg)
+       fi
+   done
+   
+   if [ ${#missing_packages[@]} -ne 0 ]; then
+       log "ERROR" "以下软件包安装失败: ${missing_packages[*]}"
+       return 1
+   fi
+   
+   # 设置系统优化参数
+   log "INFO" "设置系统参数..."
+   
+   # 确保目录存在
+   mkdir -p /etc/sysctl.d
+
+   # 备份原有配置（如果存在）
+   if [ -f "/etc/sysctl.d/99-custom.conf" ]; then
+       mv /etc/sysctl.d/99-custom.conf /etc/sysctl.d/99-custom.conf.bak.$(date +%Y%m%d%H%M%S)
+   fi
+
+   # 创建新的配置文件
+   cat > /etc/sysctl.d/99-custom.conf << EOF
 # 系统优化参数
 net.ipv4.tcp_fastopen = 3
 net.ipv4.tcp_syncookies = 1
@@ -145,52 +155,110 @@ net.ipv4.tcp_max_orphans = 3276800
 net.ipv4.tcp_timestamps = 1
 net.ipv4.tcp_sack = 1
 net.ipv4.tcp_window_scaling = 1
+
+# 网络性能优化
+net.core.somaxconn = 32768
+net.core.netdev_max_backlog = 32768
+net.ipv4.tcp_max_syn_backlog = 16384
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 87380 16777216
+
+# 连接优化
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_congestion_control = cubic
+
+# 安全性优化
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
 EOF
-    
-    # 应用系统参数
-    if ! sysctl -p /etc/sysctl.d/99-custom.conf; then
-        log "WARNING" "系统参数设置可能未完全生效"
-    fi
-    
-    # 设置时区
-    log "INFO" "设置系统时区..."
-    if ! timedatectl set-timezone Asia/Shanghai; then
-        log "ERROR" "时区设置失败"
-        return 1
-    fi
-    
-    # 验证所有配置
-    local check_status=0
-    
-    # 检查时区
-    if [ "$(timedatectl show --property=Timezone --value)" != "Asia/Shanghai" ]; then
-        log "ERROR" "时区设置验证失败"
-        check_status=1
-    fi
-    
-    # 检查系统参数
-    if ! sysctl net.ipv4.tcp_fastopen >/dev/null 2>&1; then
-        log "ERROR" "系统参数设置验证失败"
-        check_status=1
-    fi
-    
-    # 如果所有检查都通过，设置状态
-    if [ $check_status -eq 0 ]; then
-        # 确保状态目录存在
-        mkdir -p "$INSTALL_STATUS_DIR"
-        chmod 700 "$INSTALL_STATUS_DIR"
-        
-        if set_status SYSTEM_PREPARED 1; then
-            log "SUCCESS" "系统环境准备完成"
-            return 0
-        else
-            log "ERROR" "状态设置失败"
-            return 1
-        fi
-    else
-        log "ERROR" "系统环境准备失败"
-        return 1
-    fi
+
+   # 设置文件权限
+   chmod 644 /etc/sysctl.d/99-custom.conf
+
+   # 应用系统参数
+   if ! sysctl -p /etc/sysctl.d/99-custom.conf > /dev/null 2>&1; then
+       log "WARNING" "系统参数设置可能未完全生效，但不影响基本功能"
+   else
+       log "SUCCESS" "系统参数设置成功"
+   fi
+
+   # 验证参数是否生效
+   local sysctl_status=0
+   local check_params=(
+       "net.ipv4.tcp_fastopen"
+       "net.ipv4.tcp_syncookies"
+       "net.ipv4.tcp_fin_timeout"
+       "net.core.somaxconn"
+       "net.ipv4.tcp_max_syn_backlog"
+   )
+
+   for param in "${check_params[@]}"; do
+       if ! sysctl -n $param >/dev/null 2>&1; then
+           sysctl_status=1
+           log "WARNING" "参数 $param 可能未正确设置"
+       fi
+   done
+
+   if [ $sysctl_status -eq 1 ]; then
+       log "WARNING" "部分系统参数可能未生效，但不影响基本功能"
+   fi
+   
+   # 设置时区
+   log "INFO" "设置系统时区..."
+   if ! timedatectl set-timezone Asia/Shanghai; then
+       log "ERROR" "时区设置失败"
+       return 1
+   fi
+
+   # 验证所有配置
+   local check_status=0
+   
+   # 检查时区
+   if [ "$(timedatectl show --property=Timezone --value)" != "Asia/Shanghai" ]; then
+       log "ERROR" "时区设置验证失败"
+       check_status=1
+   fi
+   
+   # 检查系统参数文件
+   if [ ! -f "/etc/sysctl.d/99-custom.conf" ]; then
+       log "ERROR" "系统参数文件不存在"
+       check_status=1
+   fi
+   
+   # 检查必要服务
+   for service in nginx ufw; do
+       if ! systemctl is-enabled $service >/dev/null 2>&1; then
+           log "WARNING" "服务 $service 可能未正确启用"
+           systemctl enable $service >/dev/null 2>&1
+       fi
+   done
+   
+   # 如果所有检查都通过，设置状态
+   if [ $check_status -eq 0 ]; then
+       # 确保状态目录存在
+       mkdir -p "$INSTALL_STATUS_DIR"
+       chmod 700 "$INSTALL_STATUS_DIR"
+       
+       if set_status SYSTEM_PREPARED 1; then
+           log "SUCCESS" "系统环境准备完成"
+           return 0
+       else
+           log "ERROR" "状态设置失败"
+           return 1
+       fi
+   else
+       log "ERROR" "系统环境准备失败"
+       return 1
+   fi
 }
 
 # 申请SSL证书
