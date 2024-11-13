@@ -612,7 +612,7 @@ update_nginx_ssl() {
     if [ ! -f "/etc/haproxy/certs/${domain}.pem" ] || [ ! -f "/etc/haproxy/certs/${domain}.key" ]; then
         log "ERROR" "证书文件不存在"
         return 1
-    }
+    fi
 
     # 更新Nginx配置
     cat > /etc/nginx/conf.d/default.conf << EOF
