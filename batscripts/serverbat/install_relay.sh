@@ -259,91 +259,115 @@ install_cert() {
 
    # 申请证书
    log "INFO" "申请SSL证书..."
-   ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
-       --keylength ec-256 \
-       --key-file /etc/haproxy/certs/${domain}.key \
-       --fullchain-file /etc/haproxy/certs/${domain}.pem
+   # 先清理之前的申请记录（如果有的话）
+    ~/.acme.sh/acme.sh --remove -d ${domain} --force >/dev/null 2>&1
 
-   if [ $? -ne 0 ]; then
-       log "ERROR" "证书申请失败"
-       # 重启之前运行的服务
-       if systemctl is-enabled nginx >/dev/null 2>&1; then
-           systemctl start nginx
-       fi
-       if systemctl is-enabled haproxy >/dev/null 2>&1; then
-           systemctl start haproxy
-       fi
-       return 1
-   fi
+    # 申请并添加调试参数
+    ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
+        --keylength ec-256 \
+        --key-file /etc/haproxy/certs/${domain}.key \
+        --fullchain-file /etc/haproxy/certs/${domain}.pem \
+        --force \
+        --debug \
+        --log "/var/log/acme.sh.log"
 
-   # 合并证书和私钥为HAProxy格式
-   cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > \
-       /etc/haproxy/certs/${domain}.pem.combined
 
-   # 设置证书权限
-   chmod 600 /etc/haproxy/certs/${domain}.pem.combined
-   chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined
+    if [ $? -ne 0 ]; then
+        log "ERROR" "证书申请失败"
+        log "INFO" "查看详细日志: cat /var/log/acme.sh.log"
+        # 输出最后几行错误信息
+        tail -n 10 /var/log/acme.sh.log
+        
+        # 检查常见问题
+        if dig +short ${domain} | grep -q '^[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+$'; then
+            local domain_ip=$(dig +short ${domain})
+            local server_ip=$(curl -s ifconfig.me)
+            if [ "$domain_ip" != "$server_ip" ]; then
+                log "ERROR" "域名解析IP（${domain_ip}）与服务器IP（${server_ip}）不匹配"
+                log "INFO" "请确保域名已正确解析到服务器IP"
+            fi
+        else
+            log "ERROR" "域名解析失败，请检查域名配置"
+        fi
+        
+        # 重启之前运行的服务
+        if systemctl is-enabled nginx >/dev/null 2>&1; then
+            systemctl start nginx
+        fi
+        if systemctl is-enabled haproxy >/dev/null 2>&1; then
+            systemctl start haproxy
+        fi
+        return 1
+    fi
 
-   # 验证证书
-   if [ -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
-       if ! openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
-           log "ERROR" "证书无效或已过期"
-           return 1
-       fi
+    # 合并证书和私钥为HAProxy格式
+    cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > \
+        /etc/haproxy/certs/${domain}.pem.combined
 
-       # 更新Nginx SSL配置
-       if ! update_nginx_ssl "${domain}"; then
-           log "WARNING" "Nginx SSL配置更新失败，但证书已安装"
-       fi
-   else
-       log "ERROR" "证书文件不存在"
-       return 1
-   fi
+    # 设置证书权限
+    chmod 600 /etc/haproxy/certs/${domain}.pem.combined
+    chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined
 
-   # 配置证书自动更新
-   ~/.acme.sh/acme.sh --install-cert -d ${domain} \
-       --key-file /etc/haproxy/certs/${domain}.key \
-       --fullchain-file /etc/haproxy/certs/${domain}.pem \
-       --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && systemctl reload haproxy"
+    # 验证证书
+    if [ -f "/etc/haproxy/certs/${domain}.pem.combined" ]; then
+        if ! openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
+            log "ERROR" "证书无效或已过期"
+            return 1
+        fi
 
-   # 重启服务
-   log "INFO" "重启相关服务..."
-   
-   if systemctl is-enabled nginx >/dev/null 2>&1; then
-       systemctl start nginx
-   fi
-   
-   if systemctl is-enabled haproxy >/dev/null 2>&1; then
-       systemctl start haproxy
-   fi
+        # 更新Nginx SSL配置
+        if ! update_nginx_ssl "${domain}"; then
+            log "WARNING" "Nginx SSL配置更新失败，但证书已安装"
+        fi
+    else
+        log "ERROR" "证书文件不存在"
+        return 1
+    fi
 
-   # 验证服务状态
-   local service_status=0
-   
-   if systemctl is-enabled nginx >/dev/null 2>&1; then
-       if ! systemctl is-active --quiet nginx; then
-           log "ERROR" "Nginx启动失败"
-           service_status=1
-       fi
-   fi
-   
-   if systemctl is-enabled haproxy >/dev/null 2>&1; then
-       if ! systemctl is-active --quiet haproxy; then
-           log "ERROR" "HAProxy启动失败"
-           service_status=1
-       fi
-   fi
+    # 配置证书自动更新
+    ~/.acme.sh/acme.sh --install-cert -d ${domain} \
+        --key-file /etc/haproxy/certs/${domain}.key \
+        --fullchain-file /etc/haproxy/certs/${domain}.pem \
+        --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && systemctl reload haproxy"
 
-   if [ $service_status -eq 0 ]; then
-       # 保存配置
-       set_status CERT_INSTALLED 1
-       set_status DOMAIN_NAME ${domain}
-       log "SUCCESS" "SSL证书配置完成"
-       return 0
-   else
-       log "ERROR" "服务启动失败"
-       return 1
-   fi
+    # 重启服务
+    log "INFO" "重启相关服务..."
+    
+    if systemctl is-enabled nginx >/dev/null 2>&1; then
+        systemctl start nginx
+    fi
+    
+    if systemctl is-enabled haproxy >/dev/null 2>&1; then
+        systemctl start haproxy
+    fi
+
+    # 验证服务状态
+    local service_status=0
+    
+    if systemctl is-enabled nginx >/dev/null 2>&1; then
+        if ! systemctl is-active --quiet nginx; then
+            log "ERROR" "Nginx启动失败"
+            service_status=1
+        fi
+    fi
+    
+    if systemctl is-enabled haproxy >/dev/null 2>&1; then
+        if ! systemctl is-active --quiet haproxy; then
+            log "ERROR" "HAProxy启动失败"
+            service_status=1
+        fi
+    fi
+
+    if [ $service_status -eq 0 ]; then
+        # 保存配置
+        set_status CERT_INSTALLED 1
+        set_status DOMAIN_NAME ${domain}
+        log "SUCCESS" "SSL证书配置完成"
+        return 0
+    else
+        log "ERROR" "服务启动失败"
+        return 1
+    fi
 }
 
 # 配置Nginx伪装站点
