@@ -1253,16 +1253,56 @@ show_menu() {
     echo -e " 1. 系统环境准备 $(if [ "$(get_status SYSTEM_PREPARED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
     echo -e " 2. 配置伪装站点 $(if [ "$(get_status NGINX_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
     echo -e " 3. 申请SSL证书 $(if [ "$(get_status CERT_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 4. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 5. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 6. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo -e " 7. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
-    echo " 8. 查看配置信息"
-    echo " 9. 查看运行状态"
-    echo " 10. 重启所有服务"
-    echo " 11. 卸载所有组件"
+    echo -e " 4. 查看证书日志"    # 新添加的选项
+    echo -e " 5. 安装 HAProxy $(if [ "$(get_status HAPROXY_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 6. 配置端口转发 $(if [ "$(get_status MULTI_PORT_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 7. 配置 UFW 防火墙 $(if [ "$(get_status UFW_CONFIGURED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo -e " 8. 安装 BBR 加速 $(if [ "$(get_status BBR_INSTALLED)" = "1" ]; then echo "${GREEN}[OK]${PLAIN}"; fi)"
+    echo " 9. 查看配置信息"
+    echo " 10. 查看运行状态"
+    echo " 11. 重启所有服务"
+    echo " 12. 卸载所有组件"
     echo " 0. 退出"
     echo "=========================================="
+}
+
+# 查看证书日志
+view_cert_log() {
+    echo "====================== 证书日志 ======================"
+    if [ -f "/var/log/acme.sh.log" ]; then
+        echo "最近50行日志："
+        echo "---------------------------------------------------"
+        tail -n 50 /var/log/acme.sh.log
+        echo "---------------------------------------------------"
+        echo "完整日志文件路径：/var/log/acme.sh.log"
+    else
+        log "INFO" "证书日志文件不存在，可能还未申请过证书"
+    fi
+    
+    # 检查证书状态
+    local domain=$(get_status DOMAIN_NAME)
+    if [ -n "$domain" ]; then
+        echo -e "\n当前证书状态："
+        if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
+            echo "证书信息："
+            openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -text | grep -E "Not (Before|After)"
+            echo "证书验证："
+            if openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -checkend 0; then
+                echo -e "${GREEN}证书有效${PLAIN}"
+            else
+                echo -e "${RED}证书已过期${PLAIN}"
+            fi
+        else
+            echo "未找到证书文件"
+        fi
+        
+        # 检查自动更新配置
+        if [ -f ~/.acme.sh/acme.sh ]; then
+            echo -e "\n自动更新配置："
+            ~/.acme.sh/acme.sh --list | grep ${domain}
+        fi
+    fi
+    echo "==================================================="
 }
 
 # 主函数
@@ -1291,14 +1331,15 @@ main() {
             1) check_reinstall "系统环境" "SYSTEM_PREPARED" && prepare_system ;;
             2) check_reinstall "伪装站点" "NGINX_INSTALLED" && configure_nginx ;;
             3) check_reinstall "SSL证书" "CERT_INSTALLED" && install_cert ;;
-            4) check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy ;;
-            5) check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay ;;
-            6) check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw ;;
-            7) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
-            8) show_config ;;
-            9) show_status ;;
-            10) restart_services ;;
-            11) uninstall_all ;;
+            4) view_cert_log ;;
+            5) check_reinstall "HAProxy" "HAPROXY_INSTALLED" && install_haproxy ;;
+            6) check_reinstall "端口转发" "MULTI_PORT_CONFIGURED" && configure_relay ;;
+            7) check_reinstall "UFW防火墙" "UFW_CONFIGURED" && configure_ufw ;;
+            8) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
+            9) show_config ;;
+            10) show_status ;;
+            11) restart_services ;;
+            12) uninstall_all ;;
             *) log "ERROR" "无效的选择" ;;
         esac
         echo
