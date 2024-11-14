@@ -261,127 +261,201 @@ EOF
    fi
 }
 
+# 配置防火墙
+configure_firewall_for_cert() {
+    log "INFO" "配置防火墙规则..."
+    
+    # 检查是否安装了ufw
+    if ! command -v ufw >/dev/null 2>&1; then
+        log "INFO" "安装 ufw..."
+        apt-get update
+        apt-get install -y ufw
+    fi
+
+    # 保存原有的UFW规则（如果有）
+    if [ -f "/etc/ufw/user.rules" ]; then
+        cp /etc/ufw/user.rules /etc/ufw/user.rules.bak
+    fi
+
+    # 确保UFW已启用
+    ufw --force enable
+
+    # 允许SSH（防止断开连接）
+    local ssh_port=$(ss -tuln | grep -i ssh | awk '{print $5}' | awk -F: '{print $2}')
+    ssh_port=${ssh_port:-22}
+    ufw allow ${ssh_port}/tcp
+
+    # 临时允许80端口（用于证书验证）
+    ufw allow 80/tcp
+
+    # 允许HAProxy端口
+    ufw allow 8443/tcp
+
+    # 允许状态页面端口
+    ufw allow 10086/tcp
+
+    # 应用规则
+    ufw reload
+
+    log "SUCCESS" "防火墙规则配置完成"
+    log "INFO" "端口说明："
+    log "INFO" "- 80: 用于SSL证书验证"
+    log "INFO" "- 8443: HAProxy服务端口"
+    log "INFO" "- 10086: 状态监控页面"
+}
+
+# 更新防火墙规则（证书申请完成后）
+post_cert_firewall() {
+    log "INFO" "更新防火墙规则..."
+    
+    # 删除证书验证用的80端口规则
+    ufw delete allow 80/tcp
+
+    # 重新加载防火墙规则
+    ufw reload
+
+    log "SUCCESS" "防火墙规则更新完成"
+}
+
 # 申请SSL证书
 install_cert() {
    log "INFO" "开始申请SSL证书..."
-   
-   # 获取域名
-   local domain
-   if [ -n "$(get_status DOMAIN_NAME)" ]; then
-       read -p "已配置域名$(get_status DOMAIN_NAME)，是否使用新域名？[y/N] " change_domain
-       if [[ "${change_domain,,}" != "y" ]]; then
-           domain=$(get_status DOMAIN_NAME)
-       fi
-   fi
-   
-   if [ -z "$domain" ]; then
-       read -p "请输入你的域名：" domain
-       if [ -z "$domain" ]; then
-           log "ERROR" "域名不能为空"
-           return 1
-       fi
-   fi
-   
-   # 创建目录和日志文件
-   mkdir -p /etc/haproxy/certs
-   chmod 700 /etc/haproxy/certs
-   touch /var/log/acme.sh.log
-   chmod 644 /var/log/acme.sh.log
+    
+    # 获取域名
+    local domain
+    if [ -n "$(get_status DOMAIN_NAME)" ]; then
+        read -p "已配置域名$(get_status DOMAIN_NAME)，是否使用新域名？[y/N] " change_domain
+        if [[ "${change_domain,,}" != "y" ]]; then
+            domain=$(get_status DOMAIN_NAME)
+        fi
+    fi
+    
+    if [ -z "$domain" ]; then
+        read -p "请输入你的域名：" domain
+        if [ -z "$domain" ]; then
+            log "ERROR" "域名不能为空"
+            return 1
+        fi
+    fi
+    
+    # 创建目录和日志文件
+    mkdir -p /etc/haproxy/certs
+    chmod 700 /etc/haproxy/certs
+    touch /var/log/acme.sh.log
+    chmod 644 /var/log/acme.sh.log
 
-   # 验证域名解析
-   log "INFO" "验证域名解析..."
-   local domain_ip=$(dig +short ${domain} | tail -n1)
-   local server_ip=$(curl -s ifconfig.me)
-   
-   if [ -z "$domain_ip" ]; then
-       log "ERROR" "无法获取域名解析记录"
-       return 1
-   fi
-   
-   if [ "$domain_ip" != "$server_ip" ]; then
-       log "ERROR" "域名解析IP（${domain_ip}）与服务器IP（${server_ip}）不匹配"
-       log "INFO" "请确保域名已正确解析到服务器IP"
-       return 1
-   fi
-   
-   log "SUCCESS" "域名解析验证通过"
+    # 验证域名解析
+    log "INFO" "验证域名解析..."
+    local domain_ip=$(dig +short ${domain} | tail -n1)
+    local server_ip=$(curl -s ifconfig.me)
+    
+    if [ -z "$domain_ip" ]; then
+        log "ERROR" "无法获取域名解析记录"
+        return 1
+    fi
+    
+    if [ "$domain_ip" != "$server_ip" ]; then
+        log "ERROR" "域名解析IP（${domain_ip}）与服务器IP（${server_ip}）不匹配"
+        log "INFO" "请确保域名已正确解析到服务器IP"
+        return 1
+    fi
+    
+    log "SUCCESS" "域名解析验证通过"
 
-   # 检查并停止服务
-   log "INFO" "检查并停止相关服务..."
-   
-   if systemctl is-enabled nginx >/dev/null 2>&1; then
-       log "INFO" "停止Nginx服务..."
-       systemctl stop nginx
-   fi
-   
-   if systemctl is-enabled haproxy >/dev/null 2>&1; then
-       log "INFO" "停止HAProxy服务..."
-       systemctl stop haproxy
-   fi
+    # 配置防火墙
+    configure_firewall_for_cert
 
-   # 等待端口释放
-   sleep 2
+    # 检查并停止服务
+    log "INFO" "检查并停止相关服务..."
+    
+    if systemctl is-enabled nginx >/dev/null 2>&1; then
+        log "INFO" "停止Nginx服务..."
+        systemctl stop nginx
+    fi
+    
+    if systemctl is-enabled haproxy >/dev/null 2>&1; then
+        log "INFO" "停止HAProxy服务..."
+        systemctl stop haproxy
+    fi
 
-   # 确保80端口可用
-   if ss -tuln | grep -q ':80 '; then
-       log "ERROR" "80端口仍被占用，尝试强制释放..."
-       fuser -k 80/tcp
-       sleep 2
-       if ss -tuln | grep -q ':80 '; then
-           log "ERROR" "无法释放80端口"
-           return 1
-       fi
-   fi
+    # 等待端口释放
+    sleep 2
 
-   # 安装acme.sh
-   log "INFO" "安装 acme.sh..."
-   if [ ! -f ~/.acme.sh/acme.sh ]; then
-       curl -s https://get.acme.sh | sh -s email=admin@${domain}
-       if [ $? -ne 0 ]; then
-           log "ERROR" "acme.sh 安装失败"
-           return 1
-       fi
+    # 确保80端口可用
+    if ss -tuln | grep -q ':80 '; then
+        log "ERROR" "80端口仍被占用，尝试强制释放..."
+        fuser -k 80/tcp
+        sleep 2
+        if ss -tuln | grep -q ':80 '; then
+            log "ERROR" "无法释放80端口"
+            return 1
+        fi
+    fi
 
-       source ~/.bashrc
-       source ~/.profile >/dev/null 2>&1
-       sleep 2
-       
-       if [ ! -f ~/.acme.sh/acme.sh ]; then
-           log "ERROR" "acme.sh 安装验证失败"
-           return 1
-       fi
-       log "INFO" "acme.sh 安装成功"
-   else
-       log "INFO" "acme.sh 已安装，尝试更新..."
-       ~/.acme.sh/acme.sh --upgrade --auto-upgrade
-   fi
+    # 安装acme.sh
+    log "INFO" "安装 acme.sh..."
+    if [ ! -f ~/.acme.sh/acme.sh ]; then
+        curl -s https://get.acme.sh | sh -s email=admin@${domain}
+        if [ $? -ne 0 ]; then
+            log "ERROR" "acme.sh 安装失败"
+            return 1
+        fi
 
-   # 配置acme.sh
-   log "INFO" "配置 acme.sh..."
-   ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+        source ~/.bashrc
+        source ~/.profile >/dev/null 2>&1
+        sleep 2
+        
+        if [ ! -f ~/.acme.sh/acme.sh ]; then
+            log "ERROR" "acme.sh 安装验证失败"
+            return 1
+        fi
+        log "INFO" "acme.sh 安装成功"
+    else
+        log "INFO" "acme.sh 已安装，尝试更新..."
+        ~/.acme.sh/acme.sh --upgrade --auto-upgrade
+    fi
 
-   # 清理之前的证书（如果存在）
-   if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
-       log "INFO" "清理旧证书..."
-       rm -f /etc/haproxy/certs/${domain}.*
-   fi
+    # 配置acme.sh
+    log "INFO" "配置 acme.sh..."
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
 
-   # 申请证书
+    # 清理之前的证书（如果存在）
+    if [ -f "/etc/haproxy/certs/${domain}.pem" ]; then
+        log "INFO" "清理旧证书..."
+        rm -f /etc/haproxy/certs/${domain}.*
+    fi
+
+
+    # 申请证书
    log "INFO" "申请SSL证书..."
    ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
        --keylength ec-256 \
        --key-file /etc/haproxy/certs/${domain}.key \
        --fullchain-file /etc/haproxy/certs/${domain}.pem \
        --force \
+       --debug \
        --log /var/log/acme.sh.log
 
+   local cert_status=$?
+
    # 检查证书申请结果
-   if [ $? -ne 0 ]; then
+   if [ $cert_status -ne 0 ]; then
        log "ERROR" "证书申请失败"
        log "INFO" "查看详细日志: cat /var/log/acme.sh.log"
        if [ -f "/var/log/acme.sh.log" ]; then
            tail -n 10 /var/log/acme.sh.log
        fi
+
+       # 验证网络连接
+       log "INFO" "检查网络连接..."
+       if ! curl -sI https://acme-v02.api.letsencrypt.org/directory >/dev/null 2>&1; then
+           log "ERROR" "无法连接到 Let's Encrypt 服务器，请检查网络"
+       fi
+
+       # 检查防火墙状态
+       log "INFO" "检查防火墙状态..."
+       ufw status verbose
+
        return 1
    fi
 
@@ -392,7 +466,15 @@ install_cert() {
        return 1
    fi
 
+   # 验证证书有效性
+   log "INFO" "验证证书..."
+   if ! openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -text >/dev/null 2>&1; then
+       log "ERROR" "证书无效"
+       return 1
+   fi
+
    # 合并证书文件
+   log "INFO" "合并证书文件..."
    cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > \
        /etc/haproxy/certs/${domain}.pem.combined
 
@@ -401,10 +483,11 @@ install_cert() {
    chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined
 
    # 配置证书自动更新
+   log "INFO" "配置证书自动更新..."
    ~/.acme.sh/acme.sh --install-cert -d ${domain} \
        --key-file /etc/haproxy/certs/${domain}.key \
        --fullchain-file /etc/haproxy/certs/${domain}.pem \
-       --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && systemctl reload haproxy"
+       --reloadcmd "cat /etc/haproxy/certs/${domain}.pem /etc/haproxy/certs/${domain}.key > /etc/haproxy/certs/${domain}.pem.combined && chmod 600 /etc/haproxy/certs/${domain}.pem.combined && chown haproxy:haproxy /etc/haproxy/certs/${domain}.pem.combined && (systemctl reload haproxy || systemctl restart haproxy)"
 
    # 更新Nginx SSL配置
    if systemctl is-enabled nginx >/dev/null 2>&1; then
@@ -413,6 +496,9 @@ install_cert() {
            log "WARNING" "Nginx SSL配置更新失败，但证书已安装"
        fi
    fi
+
+   # 更新防火墙规则
+   post_cert_firewall
 
    # 证书申请成功，重启服务
    log "INFO" "重启服务..."
@@ -424,12 +510,50 @@ install_cert() {
        systemctl start haproxy
    fi
 
+   # 验证服务状态
+   log "INFO" "验证服务状态..."
+   local service_error=0
+
+   if systemctl is-enabled nginx >/dev/null 2>&1; then
+       if ! systemctl is-active --quiet nginx; then
+           log "ERROR" "Nginx 启动失败"
+           service_error=1
+       fi
+   fi
+
+   if systemctl is-enabled haproxy >/dev/null 2>&1; then
+       if ! systemctl is-active --quiet haproxy; then
+           log "ERROR" "HAProxy 启动失败"
+           service_error=1
+       fi
+   fi
+
+   if [ $service_error -eq 1 ]; then
+       log "WARNING" "部分服务启动失败，请检查日志"
+   fi
+
+   # 验证端口监听
+   log "INFO" "验证端口监听..."
+   if ! ss -tuln | grep -q ':8443 '; then
+       log "WARNING" "8443端口未监听，请检查HAProxy配置"
+   fi
+
+   if ! ss -tuln | grep -q ':10086 '; then
+       log "WARNING" "10086端口未监听，请检查状态页面配置"
+   fi
+
    # 保存配置
    set_status CERT_INSTALLED 1
    set_status DOMAIN_NAME ${domain}
    
    log "SUCCESS" "SSL证书配置完成"
+   
+   # 显示证书信息
+   log "INFO" "证书信息："
+   openssl x509 -in "/etc/haproxy/certs/${domain}.pem" -noout -dates
+   
    return 0
+
 }
 
 # 配置Nginx伪装站点
