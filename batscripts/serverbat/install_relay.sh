@@ -502,23 +502,44 @@ install_cert() {
 
 # 配置Nginx伪装站点
 configure_nginx() {
-   log "INFO" "配置Nginx伪装站点..."
+    log "INFO" "配置Nginx伪装站点..."
    
-   # 检查是否需要重新配置域名
-   local domain
-   if [ -n "$(get_status DOMAIN_NAME)" ]; then
-       domain=$(get_status DOMAIN_NAME)
-   else
-       read -p "请输入你的域名: " domain
-       if [ -z "$domain" ]; then
-           log "ERROR" "域名不能为空"
-           return 1
-       fi
-   fi
+    # 确保配置目录存在
+    mkdir -p /etc/nginx/conf.d
+    mkdir -p /var/log/nginx
+    
+    # 检查和创建状态目录
+    if [ ! -d "$INSTALL_STATUS_DIR" ]; then
+        mkdir -p "$INSTALL_STATUS_DIR"
+        chmod 700 "$INSTALL_STATUS_DIR"
+    fi
 
-   # 创建必要的目录
-   mkdir -p /etc/nginx/conf.d
-   mkdir -p /var/log/nginx
+    # 检查状态文件
+    if [ ! -f "$STATUS_FILE" ]; then
+        touch "$STATUS_FILE"
+        chmod 600 "$STATUS_FILE"
+    fi
+
+    # 检查是否需要重新配置域名
+    local domain
+    if [ -n "$(get_status DOMAIN_NAME)" ]; then
+        domain=$(get_status DOMAIN_NAME)
+        log "INFO" "使用已配置的域名: ${domain}"
+    else
+        read -p "请输入你的域名: " domain
+        if [ -z "$domain" ]; then
+            log "ERROR" "域名不能为空"
+            return 1
+        fi
+        
+        # 保存域名配置
+        echo "DOMAIN_NAME=${domain}" >> "$STATUS_FILE"
+        if ! grep -q "^DOMAIN_NAME=${domain}$" "$STATUS_FILE"; then
+            log "ERROR" "域名配置保存失败"
+            return 1
+        fi
+        log "INFO" "域名配置已保存: ${domain}"
+    fi
 
    # 创建 nginx.conf 主配置文件
    cat > /etc/nginx/nginx.conf << 'EOF'
@@ -753,63 +774,47 @@ EOF
    esac
 
    # 设置目录权限
-   chown -R www-data:www-data /var/www/html
-   chmod -R 755 /var/www/html
-   
-   # 检查Nginx配置语法
-   if ! nginx -t; then
-       log "ERROR" "Nginx配置检查失败"
-       return 1
-   fi
-   
-   # 重启Nginx
-   systemctl restart nginx
-   sleep 2  # 等待服务启动
-   
-   # 全面检查Nginx状态
-   local nginx_status=0
-   # 检查服务是否运行
-   if ! systemctl is-active --quiet nginx; then
-       log "ERROR" "Nginx服务未运行"
-       nginx_status=1
-   fi
-   
-   # 检查配置文件是否存在
-   if [ ! -f "/etc/nginx/conf.d/default.conf" ]; then
-       log "ERROR" "Nginx配置文件不存在"
-       nginx_status=1
-   fi
-   
-   # 检查网站文件是否存在
-   if [ ! -f "/var/www/html/index.html" ]; then
-       log "ERROR" "网站文件不存在"
-       nginx_status=1
-   fi
-   
-   # 检查80端口是否在监听
-   if ! ss -tuln | grep -q ':80 '; then
-       log "ERROR" "80端口未监听"
-       nginx_status=1
-   fi
-   
-   # 保存域名到状态文件
-   if ! set_status DOMAIN_NAME "${domain}"; then
-       log "ERROR" "保存域名配置失败"
-       return 1
-   fi
-   
-   if [ $nginx_status -eq 0 ]; then
-       if set_status NGINX_INSTALLED 1; then
-           log "SUCCESS" "Nginx伪装站点配置完成"
-           return 0
-       else
-           log "ERROR" "状态保存失败"
-           return 1
-       fi
-   else
-       log "ERROR" "Nginx配置失败"
-       return 1
-   fi
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
+
+    # 确保日志目录存在并设置权限
+    mkdir -p /var/log/nginx
+    chown -R www-data:www-data /var/log/nginx
+    chmod -R 755 /var/log/nginx
+
+    # 检查配置
+    if ! nginx -t; then
+        log "ERROR" "Nginx配置检查失败"
+        return 1
+    fi
+
+    # 重启Nginx
+    systemctl restart nginx
+    sleep 2
+
+    # 验证Nginx状态
+    if ! systemctl is-active --quiet nginx; then
+        log "ERROR" "Nginx启动失败"
+        return 1
+    fi
+
+    # 检查80端口
+    if ! ss -tuln | grep -q ':80 '; then
+        log "ERROR" "80端口未正常监听"
+        return 1
+    fi
+
+    # 设置状态
+    if [ -f "/var/www/html/index.html" ] && \
+       [ -f "/etc/nginx/conf.d/default.conf" ] && \
+       systemctl is-active --quiet nginx; then
+        set_status NGINX_INSTALLED 1
+        log "SUCCESS" "Nginx伪装站点配置完成"
+        return 0
+    else
+        log "ERROR" "Nginx配置验证失败"
+        return 1
+    fi
 }
 
 # 更新Nginx SSL配置
