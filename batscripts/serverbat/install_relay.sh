@@ -264,32 +264,39 @@ EOF
 # 申请SSL证书
 install_cert() {
     log "INFO" "开始申请SSL证书..."
-   
-   # 获取域名
-   local domain
-   if [ -n "$(get_status DOMAIN_NAME)" ]; then
-       read -p "已配置域名$(get_status DOMAIN_NAME)，是否使用新域名？[y/N] " change_domain
-       if [[ "${change_domain,,}" != "y" ]]; then
-           domain=$(get_status DOMAIN_NAME)
-       fi
-   fi
-   
-   if [ -z "$domain" ]; then
-       read -p "请输入你的域名：" domain
-       if [ -z "$domain" ]; then
-           log "ERROR" "域名不能为空"
-           return 1
-       fi
-   fi
-   
-   # 创建证书目录
-   mkdir -p /etc/haproxy/certs
-   chmod 700 /etc/haproxy/certs
 
-   # 检查并停止相关服务
-   log "INFO" "检查并停止相关服务..."
+    # 验证网络连接
+    log "INFO" "验证网络连接..."
+    if ! curl -sL --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory >/dev/null; then
+        log "ERROR" "无法连接到 Let's Encrypt 服务器，请检查网络"
+        return 1
+    fi
    
-   # 检查并停止Nginx
+    # 获取域名
+    local domain
+    if [ -n "$(get_status DOMAIN_NAME)" ]; then
+        read -p "已配置域名$(get_status DOMAIN_NAME)，是否使用新域名？[y/N] " change_domain
+        if [[ "${change_domain,,}" != "y" ]]; then
+            domain=$(get_status DOMAIN_NAME)
+        fi
+    fi
+    
+    if [ -z "$domain" ]; then
+        read -p "请输入你的域名：" domain
+        if [ -z "$domain" ]; then
+            log "ERROR" "域名不能为空"
+            return 1
+        fi
+    fi
+    
+    # 创建证书目录
+    mkdir -p /etc/haproxy/certs
+    chmod 700 /etc/haproxy/certs
+
+    # 检查并停止相关服务
+    log "INFO" "检查并停止相关服务..."
+   
+    # 检查并停止Nginx
     if systemctl is-enabled nginx >/dev/null 2>&1; then
         log "INFO" "停止Nginx服务..."
         if ! systemctl stop nginx; then
@@ -318,72 +325,60 @@ install_cert() {
         log "INFO" "80端口已释放"
     fi
    
-   # 检查HAProxy
-   if systemctl is-enabled haproxy >/dev/null 2>&1; then
-       log "INFO" "停止HAProxy服务..."
-       systemctl stop haproxy
-   else
-       log "INFO" "HAProxy服务未安装，跳过"
-   fi
+    # 检查HAProxy
+    if systemctl is-enabled haproxy >/dev/null 2>&1; then
+        log "INFO" "停止HAProxy服务..."
+        systemctl stop haproxy
+    else
+        log "INFO" "HAProxy服务未安装，跳过"
+    fi
 
-   # 确保端口80空闲
-   if ss -tuln | grep -q ':80 '; then
-       log "ERROR" "端口80被占用，无法申请证书"
-       return 1
-   fi
+    # 确保端口80空闲
+    if ss -tuln | grep -q ':80 '; then
+        log "ERROR" "端口80被占用，无法申请证书"
+        return 1
+    fi
 
-   # 创建日志文件
+    # 创建日志文件
     touch /var/log/acme.sh.log
     chmod 644 /var/log/acme.sh.log
 
-   # 安装 acme.sh
+    # 安装 acme.sh
     log "INFO" "安装 acme.sh..."
     if [ ! -f ~/.acme.sh/acme.sh ]; then
         # 先下载安装脚本到本地
         log "INFO" "下载 acme.sh 安装脚本..."
-        if ! curl -sL https://get.acme.sh > /tmp/acme.sh.sh; then
-            log "ERROR" "下载 acme.sh 失败"
-            return 1
-        fi
-        
-        # 检查下载的文件
-        if [ ! -s /tmp/acme.sh.sh ]; then
-            log "ERROR" "acme.sh 安装脚本下载不完整"
-            return 1
-        fi
-        
-        # 安装
-        log "INFO" "执行 acme.sh 安装..."
-        chmod +x /tmp/acme.sh.sh
-        if ! bash /tmp/acme.sh.sh --install --log /var/log/acme.sh.log; then
+        curl -s https://get.acme.sh | sh -s email=admin@${domain}
+        if [ $? -ne 0 ]; then
             log "ERROR" "acme.sh 安装失败"
             return 1
         fi
-        
-        # 清理临时文件
-        rm -f /tmp/acme.sh.sh
-        
-        # 重新加载 shell 配置
+
+        # 重新加载shell配置
         source ~/.bashrc
+        source ~/.profile >/dev/null 2>&1
+        
+        # 等待一下确保安装完成
+        sleep 2
+        
+        # 验证安装
+        if [ ! -f ~/.acme.sh/acme.sh ]; then
+            log "ERROR" "acme.sh 安装验证失败"
+            return 1
+        fi
+        log "INFO" "acme.sh 安装成功"
     else
         log "INFO" "acme.sh 已安装，尝试更新..."
         ~/.acme.sh/acme.sh --upgrade --auto-upgrade
     fi
 
-    # 验证安装
-    if [ ! -f ~/.acme.sh/acme.sh ]; then
-        log "ERROR" "acme.sh 安装验证失败"
-        return 1
-    fi
-
-    # 配置 acme.sh
+    # 配置 acme.sh 使用 Let's Encrypt
     log "INFO" "配置 acme.sh..."
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-    
-    # 验证网络连接
-    log "INFO" "验证网络连接..."
-    if ! curl -sL --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory >/dev/null; then
-        log "ERROR" "无法连接到 Let's Encrypt 服务器，请检查网络"
+
+     # 验证acme.sh是否可用
+    if ! ~/.acme.sh/acme.sh --version >/dev/null 2>&1; then
+        log "ERROR" "acme.sh 安装后验证失败"
         return 1
     fi
 
