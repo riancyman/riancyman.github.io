@@ -578,6 +578,19 @@ show_menu() {
     echo "=========================================="
 }
 
+# 检查是否需要重新安装
+check_reinstall() {
+    local component=$1
+    local status_key=$2
+    if [ "$(get_status $status_key)" = "1" ]; then
+        read -p "${component}已安装，是否重新安装？[y/N] " answer
+        if [[ "${answer,,}" != "y" ]]; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
 # 主函数
 main() {
     # 检查root权限
