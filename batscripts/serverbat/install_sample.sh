@@ -40,8 +40,7 @@ UPSTREAM_SERVERS=""
 LISTEN_PORTS=""
 STATS_USER=""
 STATS_PASS=""
-DOMAIN_NAME=""
-BT_CERT_PATH=""
+BT_PANEL_PORT=""
 EOF
     fi
     chmod 600 "$STATUS_FILE"
@@ -68,9 +67,25 @@ set_status() {
     fi
 }
 
+# 检查是否需要重新安装
+check_reinstall() {
+    local component=$1
+    local status_key=$2
+    if [ "$(get_status $status_key)" = "1" ]; then
+        read -p "${component}已安装，是否重新安装？[y/N] " answer
+        if [[ "${answer,,}" != "y" ]]; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
 # 系统环境准备
 prepare_system() {
     log "INFO" "准备系统环境..."
+    
+    # 预先配置 kexec-tools
+    echo 'LOAD_KEXEC=false' > /etc/default/kexec
     
     # 设置非交互模式
     export DEBIAN_FRONTEND=noninteractive
@@ -133,29 +148,6 @@ EOF
     return 0
 }
 
-# 定位宝塔面板证书
-find_bt_cert() {
-    local domain=$1
-    log "INFO" "查找域名 ${domain} 的证书..."
-    
-    # 常见的宝塔证书位置
-    local cert_paths=(
-        "/www/server/panel/vhost/cert"
-        "/www/server/panel/ssl"
-    )
-
-    for path in "${cert_paths[@]}"; do
-        if [ -d "${path}/${domain}" ]; then
-            if [ -f "${path}/${domain}/fullchain.pem" ] && [ -f "${path}/${domain}/privkey.pem" ]; then
-                echo "${path}/${domain}"
-                return 0
-            fi
-        fi
-    done
-
-    return 1
-}
-
 # 安装 HAProxy
 install_haproxy() {
     log "INFO" "开始安装 HAProxy..."
@@ -191,32 +183,29 @@ install_haproxy() {
 # 配置HAProxy转发
 configure_relay() {
     log "INFO" "配置端口转发..."
-    
-    # 获取域名
-    read -p "请输入已配置SSL证书的域名: " domain
-    if [ -z "$domain" ]; then
-        log "ERROR" "域名不能为空"
+
+    # 获取宝塔面板端口
+    read -p "请输入宝塔面板端口 (如: 16052): " bt_port
+    if [ -z "$bt_port" ]; then
+        log "ERROR" "宝塔面板端口不能为空"
         return 1
     fi
 
-    # 查找宝塔面板证书
-    local cert_path=$(find_bt_cert "$domain")
-    if [ -z "$cert_path" ]; then
-        log "ERROR" "未找到域名 ${domain} 的证书，请先在宝塔面板中申请证书"
+    # 检查宝塔面板SSL证书
+    local bt_ssl_dir="/www/server/panel/ssl"
+    if [ ! -f "${bt_ssl_dir}/certificate.pem" ] || [ ! -f "${bt_ssl_dir}/privateKey.pem" ]; then
+        log "ERROR" "未找到宝塔面板SSL证书，请先在面板设置中开启面板SSL"
         return 1
     fi
 
-    # 合并证书文件供HAProxy使用
-    log "INFO" "准备证书文件..."
-    cat "${cert_path}/fullchain.pem" "${cert_path}/privkey.pem" > \
-        "/etc/haproxy/certs/${domain}.pem.combined"
-    chmod 600 "/etc/haproxy/certs/${domain}.pem.combined"
-    chown haproxy:haproxy "/etc/haproxy/certs/${domain}.pem.combined"
+    # 准备HAProxy使用的证书
+    log "INFO" "配置SSL证书..."
+    mkdir -p /etc/haproxy/certs
+    cat "${bt_ssl_dir}/certificate.pem" "${bt_ssl_dir}/privateKey.pem" > \
+        "/etc/haproxy/certs/haproxy.pem"
+    chmod 600 "/etc/haproxy/certs/haproxy.pem"
+    chown haproxy:haproxy "/etc/haproxy/certs/haproxy.pem"
 
-    # 记录证书路径
-    set_status BT_CERT_PATH "${cert_path}"
-    set_status DOMAIN_NAME "${domain}"
-    
     # 配置状态页面认证
     local stats_user
     local stats_pass
@@ -281,7 +270,7 @@ defaults
 
 # HTTPS状态页面
 listen stats
-    bind *:10086 ssl crt /etc/haproxy/certs/${domain}.pem.combined
+    bind *:10086 ssl crt /etc/haproxy/certs/haproxy.pem
     mode http
     stats enable
     stats hide-version
@@ -304,7 +293,7 @@ EOF
         cat >> /etc/haproxy/haproxy.cfg << EOF
 
 frontend ft_${listen_port}
-    bind *:${listen_port} ssl crt /etc/haproxy/certs/${domain}.pem.combined
+    bind *:${listen_port} ssl crt /etc/haproxy/certs/haproxy.pem
     mode tcp
     option tcplog
     default_backend bk_${server_addr}_${server_port}
@@ -333,6 +322,7 @@ EOF
     set_status STATS_PASS "${stats_pass}"
     set_status UPSTREAM_SERVERS "${upstream_servers%,}"
     set_status LISTEN_PORTS "${listen_ports%,}"
+    set_status BT_PANEL_PORT "${bt_port}"
     set_status MULTI_PORT_CONFIGURED 1
     
     # 重启HAProxy
@@ -380,11 +370,11 @@ configure_ufw() {
     ufw allow ${ssh_port}/tcp comment 'SSH'
 
     # 允许宝塔面板端口
-    log "INFO" "配置宝塔面板端口..."
-    ufw allow 16052/tcp comment 'BT Panel'
-    ufw allow 888/tcp comment 'BT Panel'
-    ufw allow 443/tcp comment 'BT Panel SSL'
-    ufw allow 8888/tcp comment 'BT Panel'
+    local bt_port=$(get_status BT_PANEL_PORT)
+    if [ -n "$bt_port" ]; then
+        log "INFO" "配置宝塔面板端口..."
+        ufw allow ${bt_port}/tcp comment 'BT Panel'
+    fi
 
     # 允许HAProxy端口
     local listen_ports=$(get_status LISTEN_PORTS)
@@ -413,7 +403,9 @@ configure_ufw() {
         # 显示配置的端口
         log "INFO" "已开放的端口："
         log "INFO" "- ${ssh_port}: SSH"
-        log "INFO" "- 16052,888,443,8888: 宝塔面板"
+        if [ -n "$bt_port" ]; then
+            log "INFO" "- ${bt_port}: 宝塔面板"
+        fi
         if [ -n "$listen_ports" ]; then
             log "INFO" "- ${listen_ports}: HAProxy服务"
         fi
@@ -454,14 +446,76 @@ EOF
     fi
 }
 
+# 重启服务
+restart_services() {
+    log "INFO" "重启HAProxy服务..."
+    systemctl restart haproxy
+    
+    if ! systemctl is-active --quiet haproxy; then
+        log "ERROR" "HAProxy 重启失败"
+        return 1
+    fi
+    
+    log "SUCCESS" "服务重启完成"
+    return 0
+}
+
+# 卸载组件
+uninstall_all() {
+    log "WARNING" "即将卸载所有组件..."
+    read -p "确定要卸载吗？[y/N] " answer
+    if [[ "${answer,,}" != "y" ]]; then
+        return 0
+    fi
+    
+    # 停止服务
+    log "INFO" "停止服务..."
+    systemctl stop haproxy
+    systemctl disable haproxy
+    
+    # 卸载软件包
+    log "INFO" "卸载软件包..."
+    apt remove --purge -y haproxy
+    
+    # 清理配置文件
+    log "INFO" "清理配置文件..."
+    rm -rf /etc/haproxy
+    rm -rf $INSTALL_STATUS_DIR
+    
+    # 禁用UFW
+    log "INFO" "禁用防火墙..."
+    if command -v ufw >/dev/null 2>&1; then
+        ufw disable
+    fi
+    
+    # 清理系统参数
+    if [ -f "/etc/sysctl.d/99-custom.conf" ]; then
+        rm -f /etc/sysctl.d/99-custom.conf
+    fi
+    if [ -f "/etc/sysctl.d/99-bbr.conf" ]; then
+        rm -f /etc/sysctl.d/99-bbr.conf
+    fi
+    
+    log "SUCCESS" "卸载完成"
+    
+    # 询问是否重启
+    read -p "是否需要重启系统来完成清理？[y/N] " reboot_answer
+    if [[ "${reboot_answer,,}" == "y" ]]; then
+        log "INFO" "系统将在3秒后重启..."
+        sleep 3
+        reboot
+    fi
+}
+
 # 显示配置信息
 show_config() {
     echo "====================== 配置信息 ======================"
     
-    # 显示域名信息
-    local domain=$(get_status DOMAIN_NAME)
-    if [ -n "$domain" ]; then
-        echo -e "域名: ${GREEN}${domain}${PLAIN}"
+    # 显示宝塔面板信息
+    local bt_port=$(get_status BT_PANEL_PORT)
+    if [ -n "$bt_port" ]; then
+        echo -e "宝塔面板："
+        echo -e "  访问地址: https://服务器IP:${bt_port}"
     fi
     
     # 显示转发规则
@@ -484,17 +538,9 @@ show_config() {
     local stats_pass=$(get_status STATS_PASS)
     
     echo -e "\nHAProxy 状态页面："
-    if [ -n "$domain" ]; then
-        echo -e "  地址: https://${domain}:10086"
-    else
-        echo -e "  地址: https://服务器IP:10086"
-    fi
+    echo -e "  地址: https://服务器IP:10086"
     echo -e "  用户名: ${GREEN}${stats_user}${PLAIN}"
     echo -e "  密码: ${GREEN}${stats_pass}${PLAIN}"
-
-    # 显示宝塔面板信息
-    echo -e "\n宝塔面板："
-    echo -e "  面板地址: https://服务器IP:16052"
 
     echo "==================================================="
 }
@@ -523,18 +569,44 @@ show_status() {
         echo -e "HAProxy: ${RED}已停止${PLAIN}"
     fi
     
+    # 检查SSL证书状态
+    echo -e "\n[ SSL证书状态 ]"
+    if [ -f "/etc/haproxy/certs/haproxy.pem" ]; then
+        echo -e "SSL证书: ${GREEN}已配置${PLAIN}"
+        # 显示证书到期时间
+        local cert_end=$(openssl x509 -in /etc/haproxy/certs/haproxy.pem -noout -enddate | cut -d= -f2)
+        echo "证书有效期至: ${cert_end}"
+    else
+        echo -e "SSL证书: ${RED}未配置${PLAIN}"
+    fi
+    
     # 检查端口状态
     echo -e "\n[ 端口状态 ]"
+    local bt_port=$(get_status BT_PANEL_PORT)
+    if [ -n "$bt_port" ]; then
+        if ss -tuln | grep -q ":${bt_port} "; then
+            echo -e "宝塔面板端口 ${bt_port}: ${GREEN}监听中${PLAIN}"
+        else
+            echo -e "宝塔面板端口 ${bt_port}: ${RED}未监听${PLAIN}"
+        fi
+    fi
+
     local listen_ports=$(get_status LISTEN_PORTS)
     if [ -n "$listen_ports" ]; then
         IFS=',' read -ra PORTS <<< "$listen_ports"
         for port in "${PORTS[@]}"; do
             if ss -tuln | grep -q ":${port} "; then
-                echo -e "端口 ${port}: ${GREEN}监听中${PLAIN}"
+                echo -e "HAProxy端口 ${port}: ${GREEN}监听中${PLAIN}"
             else
-                echo -e "端口 ${port}: ${RED}未监听${PLAIN}"
+                echo -e "HAProxy端口 ${port}: ${RED}未监听${PLAIN}"
             fi
         done
+    fi
+    
+    if ss -tuln | grep -q ":10086 "; then
+        echo -e "状态页面端口 10086: ${GREEN}监听中${PLAIN}"
+    else
+        echo -e "状态页面端口 10086: ${RED}未监听${PLAIN}"
     fi
     
     # 检查防火墙状态
@@ -542,6 +614,8 @@ show_status() {
     if command -v ufw >/dev/null 2>&1; then
         if ufw status | grep -q "Status: active"; then
             echo -e "UFW: ${GREEN}已启用${PLAIN}"
+            echo "已开放端口:"
+            ufw status | grep ALLOW
         else
             echo -e "UFW: ${RED}已禁用${PLAIN}"
         fi
@@ -576,19 +650,6 @@ show_menu() {
     echo " 9. 卸载组件"
     echo " 0. 退出"
     echo "=========================================="
-}
-
-# 检查是否需要重新安装
-check_reinstall() {
-    local component=$1
-    local status_key=$2
-    if [ "$(get_status $status_key)" = "1" ]; then
-        read -p "${component}已安装，是否重新安装？[y/N] " answer
-        if [[ "${answer,,}" != "y" ]]; then
-            return 1
-        fi
-    fi
-    return 0
 }
 
 # 主函数
@@ -627,7 +688,7 @@ main() {
             5) check_reinstall "BBR加速" "BBR_INSTALLED" && install_bbr ;;
             6) show_config ;;
             7) show_status ;;
-            8) systemctl restart haproxy ;;
+            8) restart_services ;;
             9) uninstall_all ;;
             *) log "ERROR" "无效的选择" ;;
         esac
