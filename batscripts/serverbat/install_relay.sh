@@ -460,21 +460,39 @@ check_network_connectivity() {
     local domain=$1
     log "INFO" "执行网络诊断..."
 
-    # 检查DNS服务器
-    log "INFO" "当前DNS服务器:"
-    cat /etc/resolv.conf
-
-    # 备份当前DNS配置
-    if [ ! -f /etc/resolv.conf.bak ]; then
-        cp /etc/resolv.conf /etc/resolv.conf.bak
+    # 完全禁用防火墙进行测试
+    log "INFO" "临时禁用防火墙进行测试..."
+    if command -v ufw >/dev/null 2>&1; then
+        ufw disable
     fi
+    
+    # 检查iptables规则
+    log "INFO" "检查iptables规则..."
+    iptables -F    # 清空所有规则
+    iptables -P INPUT ACCEPT
+    iptables -P OUTPUT ACCEPT
+    iptables -P FORWARD ACCEPT
 
-    # 添加备用DNS
-    log "INFO" "添加公共DNS服务器..."
+    # 检查端口80是否真正开放
+    log "INFO" "测试80端口..."
+    nc -l -p 80 >/dev/null 2>&1 &
+    NC_PID=$!
+    sleep 2
+    
+    # 使用另一个终端测试连接
+    if ! curl -sI --connect-timeout 5 http://localhost:80 >/dev/null 2>&1; then
+        log "ERROR" "本地80端口测试失败"
+        kill $NC_PID 2>/dev/null
+        return 1
+    fi
+    kill $NC_PID 2>/dev/null
+
+    # 检查DNS服务器
+    log "INFO" "配置DNS服务器..."
     {
         echo "nameserver 8.8.8.8"
-        echo "nameserver 8.8.4.4"
         echo "nameserver 1.1.1.1"
+        echo "nameserver 208.67.222.222"
     } > /etc/resolv.conf
 
     # 检查基本网络连接
@@ -482,73 +500,51 @@ check_network_connectivity() {
     if ! ping -c 4 8.8.8.8 >/dev/null 2>&1; then
         log "ERROR" "无法连接到8.8.8.8，基本网络可能有问题"
         return 1
-    else
-        log "SUCCESS" "基本网络连接正常"
     fi
 
-    # 检查DNS解析
-    log "INFO" "检查DNS解析..."
-    local resolved_ip=$(dig +short acme-v02.api.letsencrypt.org | tail -n1)
-    if [ -z "$resolved_ip" ]; then
-        log "ERROR" "DNS解析失败"
-        return 1
-    else
-        log "SUCCESS" "DNS解析正常"
+    # 检查系统时间
+    log "INFO" "检查系统时间..."
+    if ! ntpdate -q pool.ntp.org >/dev/null 2>&1; then
+        log "WARNING" "NTP同步失败，尝试手动设置时间..."
+        apt-get install -y ntpdate >/dev/null 2>&1
+        ntpdate pool.ntp.org
     fi
 
-    # 检查HTTPS连接
-    log "INFO" "检查HTTPS连接..."
-    if ! curl -sI --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory >/dev/null 2>&1; then
-        log "WARNING" "HTTPS连接测试失败，尝试禁用IPv6..."
-        # 临时禁用IPv6
-        sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
-        sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
-        
-        # 再次测试
-        if ! curl -sI --connect-timeout 10 https://acme-v02.api.letsencrypt.org/directory >/dev/null 2>&1; then
-            log "ERROR" "HTTPS连接仍然失败"
-            return 1
+    # 测试到目标网站的连接
+    log "INFO" "测试到目标网站的连接..."
+    local test_urls=(
+        "http://${domain}"
+        "https://acme-v02.api.letsencrypt.org/directory"
+    )
+
+    for url in "${test_urls[@]}"; do
+        if ! curl -sI --connect-timeout 10 "$url" >/dev/null 2>&1; then
+            log "WARNING" "无法连接到 ${url}"
+            # 尝试使用IPv4
+            if ! curl -sI --connect-timeout 10 -4 "$url" >/dev/null 2>&1; then
+                log "ERROR" "IPv4连接到 ${url} 也失败"
+            fi
         fi
-    else
-        log "SUCCESS" "HTTPS连接正常"
-    fi
+    done
 
-    # 检查80端口
-    log "INFO" "检查80端口访问..."
-    if ! curl -sI --connect-timeout 5 http://${domain}:80 >/dev/null 2>&1; then
-        log "WARNING" "从外部无法访问80端口，检查防火墙..."
-        
-        # 检查防火墙规则
-        if command -v ufw >/dev/null 2>&1; then
-            ufw status verbose
-            
-            # 临时禁用防火墙
-            log "INFO" "临时禁用防火墙..."
-            ufw disable
-        fi
-    fi
-
-    # 验证域名解析
-    log "INFO" "验证域名解析..."
-    local domain_ip=$(dig +short ${domain} | tail -n1)
-    local server_ip=$(curl -s ifconfig.me || curl -s ip.sb)
+    # 验证80端口是否可从外部访问
+    log "INFO" "启动测试web服务器..."
+    # 创建测试文件
+    mkdir -p /var/www/html/.well-known/acme-challenge/
+    echo "test" > /var/www/html/.well-known/acme-challenge/test.txt
     
-    if [ -z "$domain_ip" ]; then
-        log "ERROR" "无法获取域名解析记录"
+    # 启动一个简单的web服务器
+    python3 -m http.server 80 --directory /var/www/html &
+    WEB_PID=$!
+    sleep 2
+    
+    # 测试访问
+    if ! curl -s "http://${domain}/.well-known/acme-challenge/test.txt" >/dev/null 2>&1; then
+        log "ERROR" "无法从外部访问测试文件"
+        kill $WEB_PID 2>/dev/null
         return 1
-    elif [ "$domain_ip" != "$server_ip" ]; then
-        log "ERROR" "域名解析IP（${domain_ip}）与服务器IP（${server_ip}）不匹配"
-        return 1
-    else
-        log "SUCCESS" "域名解析正常"
     fi
-
-    # 测试到Let's Encrypt的连接延迟
-    log "INFO" "测试网络延迟..."
-    local avg_ping=$(ping -c 4 acme-v02.api.letsencrypt.org 2>/dev/null | tail -1 | awk -F '/' '{print $5}')
-    if [ -n "$avg_ping" ]; then
-        log "INFO" "平均延迟: ${avg_ping}ms"
-    fi
+    kill $WEB_PID 2>/dev/null
 
     log "SUCCESS" "网络诊断完成"
     return 0
@@ -701,33 +697,36 @@ install_cert() {
 
     # 申请证书（添加重试机制）
     log "INFO" "开始申请证书..."
-    local max_retries=3
-    local retry_count=0
-    local success=false
 
-    while [ $retry_count -lt $max_retries ] && [ "$success" != "true" ]; do
-        log "INFO" "尝试申请证书 ($(($retry_count + 1))/${max_retries})..."
-        
-        ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
-            --keylength ec-256 \
-            --key-file /etc/haproxy/certs/${domain}.key \
-            --fullchain-file /etc/haproxy/certs/${domain}.pem \
-            --force \
-            --debug \
-            --log /var/log/acme.sh.log
+    # 申请证书前的准备
+    log "INFO" "准备临时Web服务..."
+    mkdir -p /var/www/html/.well-known/acme-challenge/
+    chmod -R 755 /var/www/html
+    
+    # 启动简单的web服务器
+    python3 -m http.server 80 --directory /var/www/html &
+    WEB_PID=$!
+    sleep 2
 
-        if [ $? -eq 0 ]; then
-            success=true
-            break
-        else
-            retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $max_retries ]; then
-                log "WARNING" "证书申请失败，等待30秒后重试..."
-                sleep 30
-                check_network_connectivity "${domain}"
-            fi
-        fi
-    done
+    # 申请证书
+    ~/.acme.sh/acme.sh --issue -d ${domain} --webroot /var/www/html \
+        --keylength ec-256 \
+        --key-file /etc/haproxy/certs/${domain}.key \
+        --fullchain-file /etc/haproxy/certs/${domain}.pem \
+        --force \
+        --debug \
+        --log /var/log/acme.sh.log
+    
+    CERT_STATUS=$?
+    
+    # 清理
+    kill $WEB_PID 2>/dev/null
+    rm -rf /var/www/html/.well-known
+
+    if [ $CERT_STATUS -ne 0 ]; then
+        log "ERROR" "证书申请失败"
+        return 1
+    fi
 
     # 清理临时网络配置
     cleanup_network_config
