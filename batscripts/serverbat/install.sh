@@ -415,10 +415,10 @@ install_cert() {
         return 1
     fi
 
-    # 获取邮箱（简化验证规则）
+    # 获取邮箱（使用最简单的验证）
     local email
     read -p "请输入您的邮箱(用于证书申请和更新通知)：" email
-    if [ -z "$email" ] || ! echo "$email" | grep -E "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$" > /dev/null; then
+    if [ -z "$email" ] || ! echo "$email" | grep "@" > /dev/null; then
         log "ERROR" "请输入有效的邮箱地址"
         return 1
     fi
@@ -443,17 +443,16 @@ install_cert() {
 
     cd "$HOME" || exit 1
 
-    # 以普通用户身份下载并安装 acme.sh
-    if [ ! -f "/root/.acme.sh/acme.sh" ]; then
-        log "INFO" "安装 acme.sh..."
-        wget -O acme.sh https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh
-        chmod +x acme.sh
-        ./acme.sh --install \
-            --home /root/.acme.sh \
-            --accountemail "$email"
-        rm acme.sh
+    # 卸载已有的acme.sh
+    if [ -f "/root/.acme.sh/acme.sh" ]; then
+        "/root/.acme.sh/acme.sh" --uninstall
+        rm -rf /root/.acme.sh
     fi
 
+    # 重新安装 acme.sh
+    log "INFO" "安装 acme.sh..."
+    curl https://get.acme.sh | sh -s email=$email
+    
     # 加载 acme.sh 到环境变量
     if [ -f "/root/.acme.sh/acme.sh" ]; then
         . "/root/.acme.sh/acme.sh.env"
