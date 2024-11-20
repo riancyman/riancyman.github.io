@@ -401,13 +401,7 @@ install_cert() {
         return 0
     fi
 
-    # 必须是 root 用户运行
-    if [ "$(id -u)" != "0" ]; then
-        log "ERROR" "必须使用 root 用户运行此脚本"
-        return 1
-    fi
-
-    # 获取域名
+    # 获取域名和邮箱
     local domain
     read -p "请输入你的域名：" domain
     if [ -z "$domain" ]; then
@@ -415,7 +409,6 @@ install_cert() {
         return 1
     fi
 
-    # 获取邮箱（使用最简单的验证）
     local email
     read -p "请输入您的邮箱(用于证书申请和更新通知)：" email
     if [ -z "$email" ] || ! echo "$email" | grep "@" > /dev/null; then
@@ -423,61 +416,82 @@ install_cert() {
         return 1
     fi
 
-    log "INFO" "开始申请 SSL 证书..."
+    # 安装必要的工具
+    log "INFO" "安装必要的工具..."
+    apt update
+    apt install -y dnsutils curl socat
 
-    # 先停止 Nginx
-    systemctl stop nginx
-
-    # 检查80端口是否被占用
-    if ss -tlnp | grep -q ":80 "; then
-        log "ERROR" "80端口被占用，请先释放80端口"
+    # 检查域名解析
+    log "INFO" "检查域名解析..."
+    local domain_ip=$(dig +short "${domain}")
+    local server_ip=$(curl -s http://ipv4.icanhazip.com)
+    
+    echo "域名 ${domain} 解析到的IP: ${domain_ip}"
+    echo "服务器当前IP: ${server_ip}"
+    
+    if [ -z "${domain_ip}" ]; then
+        log "ERROR" "域名未解析到任何IP地址"
+        return 1
+    fi
+    
+    if [ "${domain_ip}" != "${server_ip}" ]; then
+        log "ERROR" "域名未解析到当前服务器IP"
+        log "ERROR" "域名解析到: ${domain_ip}"
+        log "ERROR" "服务器IP: ${server_ip}"
         return 1
     fi
 
-    # 安装依赖
-    apt install -y socat curl
+    # 检查80端口
+    log "INFO" "检查80端口..."
+    if netstat -tuln | grep -q ":80 "; then
+        log "ERROR" "80端口被占用，尝试停止相关服务..."
+        systemctl stop nginx
+        systemctl stop apache2 2>/dev/null
+        sleep 2
+        
+        if netstat -tuln | grep -q ":80 "; then
+            log "ERROR" "无法释放80端口，请手动检查占用服务"
+            netstat -tuln | grep ":80 "
+            return 1
+        fi
+    fi
 
-    # 创建所需目录
+    # 创建证书目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
 
-    cd "$HOME" || exit 1
-
-    # 卸载已有的acme.sh
-    if [ -f "/root/.acme.sh/acme.sh" ]; then
-        "/root/.acme.sh/acme.sh" --uninstall
-        rm -rf /root/.acme.sh
-    fi
-
-    # 重新安装 acme.sh
+    # 安装 acme.sh
     log "INFO" "安装 acme.sh..."
-    curl https://get.acme.sh | sh -s email=$email
-    
-    # 加载 acme.sh 到环境变量
     if [ -f "/root/.acme.sh/acme.sh" ]; then
-        . "/root/.acme.sh/acme.sh.env"
+        log "INFO" "已存在 acme.sh，进行更新..."
+        /root/.acme.sh/acme.sh --upgrade
+    else
+        curl https://get.acme.sh | sh -s email="$email"
     fi
 
-    log "INFO" "开始申请证书..."
+    if [ ! -f "/root/.acme.sh/acme.sh" ]; then
+        log "ERROR" "acme.sh 安装失败"
+        return 1
+    fi
 
-    # 使用 acme.sh 申请证书
+    . "/root/.acme.sh/acme.sh.env"
+
+    # 申请证书
+    log "INFO" "开始申请证书..."
     "/root/.acme.sh/acme.sh" --issue \
         -d "${domain}" \
         --standalone \
         --force \
-        --server letsencrypt \
-        --keylength 2048 \
-        --debug
+        --debug \
+        --log "/var/log/acme.sh.log"
 
     if [ $? -ne 0 ]; then
-        log "ERROR" "证书申请失败，请检查以下几点："
-        echo "1. 确保域名 ${domain} 已正确解析到服务器IP"
-        echo "2. 确保80端口没有被占用"
-        echo "3. 检查日志: less /root/.acme.sh/acme.sh.log"
+        log "ERROR" "证书申请失败，查看详细日志..."
+        tail -n 100 /var/log/acme.sh.log
         return 1
     fi
 
-    # 安装证书到指定目录
+    # 安装证书
     "/root/.acme.sh/acme.sh" --install-cert -d "${domain}" \
         --key-file /etc/trojan-go/cert/${domain}.key \
         --fullchain-file /etc/trojan-go/cert/${domain}.pem \
@@ -488,11 +502,11 @@ install_cert() {
         return 1
     fi
 
-    # 设置证书权限
+    # 设置权限
     chmod 644 /etc/trojan-go/cert/${domain}.pem
     chmod 644 /etc/trojan-go/cert/${domain}.key
 
-    # 启用自动更新
+    # 配置自动更新
     "/root/.acme.sh/acme.sh" --upgrade --auto-upgrade
 
     # 重启 Nginx
@@ -502,11 +516,6 @@ install_cert() {
     set_status DOMAIN "${domain}"
     
     log "SUCCESS" "SSL 证书申请完成"
-    
-    # 显示证书信息
-    echo -e "\n证书信息："
-    "/root/.acme.sh/acme.sh" --list
-    
     return 0
 }
 
