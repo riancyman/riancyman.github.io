@@ -401,6 +401,12 @@ install_cert() {
         return 0
     fi
 
+    # 必须是 root 用户运行
+    if [ "$(id -u)" != "0" ]; then
+        log "ERROR" "必须使用 root 用户运行此脚本"
+        return 1
+    fi
+
     local domain
     read -p "请输入你的域名：" domain
     if [ -z "$domain" ]; then
@@ -422,47 +428,63 @@ install_cert() {
     # 安装依赖
     apt install -y socat curl
 
-    # 创建证书目录
+    # 创建所需目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
 
-    # 安装 acme.sh
+    cd "$HOME" || exit 1
+
+    # 以普通用户身份下载并安装 acme.sh
     if [ ! -f "/root/.acme.sh/acme.sh" ]; then
-        curl https://get.acme.sh | sh -s email=admin@example.com
-        source "/root/.acme.sh/acme.sh.env"
-    else
-        log "INFO" "acme.sh 已安装，进行更新..."
-        /root/.acme.sh/acme.sh --upgrade
+        log "INFO" "安装 acme.sh..."
+        wget -O acme.sh https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh
+        chmod +x acme.sh
+        ./acme.sh --install \
+            --home /root/.acme.sh \
+            --accountemail "admin@example.com"
+        rm acme.sh
     fi
 
-    # 设置默认CA
-    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+    # 加载 acme.sh 到环境变量
+    if [ -f "/root/.acme.sh/acme.sh" ]; then
+        . "/root/.acme.sh/acme.sh.env"
+    fi
 
     log "INFO" "开始申请证书..."
-    
-    # 申请证书
-    /root/.acme.sh/acme.sh --issue -d ${domain} --standalone
+
+    # 使用 acme.sh 申请证书
+    "/root/.acme.sh/acme.sh" --issue \
+        -d "${domain}" \
+        --standalone \
+        --force \
+        --server letsencrypt \
+        --keylength 2048
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书申请失败，请检查以下几点："
         echo "1. 确保域名 ${domain} 已正确解析到服务器IP"
         echo "2. 确保80端口没有被占用"
+        echo "3. 检查日志: less /root/.acme.sh/acme.sh.log"
         return 1
     fi
 
-    # 安装证书到 trojan-go 目录
-    /root/.acme.sh/acme.sh --install-cert -d ${domain} \
+    # 安装证书到指定目录
+    "/root/.acme.sh/acme.sh" --install-cert -d "${domain}" \
         --key-file /etc/trojan-go/cert/${domain}.key \
         --fullchain-file /etc/trojan-go/cert/${domain}.pem \
-        --reloadcmd "chmod 644 /etc/trojan-go/cert/${domain}.pem && chmod 644 /etc/trojan-go/cert/${domain}.key && systemctl restart nginx"
+        --reloadcmd "systemctl restart nginx"
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书安装失败"
         return 1
     fi
 
-    # 设置自动更新
-    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
+    # 设置证书权限
+    chmod 644 /etc/trojan-go/cert/${domain}.pem
+    chmod 644 /etc/trojan-go/cert/${domain}.key
+
+    # 启用自动更新
+    "/root/.acme.sh/acme.sh" --upgrade --auto-upgrade
 
     # 重启 Nginx
     systemctl start nginx
@@ -474,7 +496,7 @@ install_cert() {
     
     # 显示证书信息
     echo -e "\n证书信息："
-    /root/.acme.sh/acme.sh --list
+    "/root/.acme.sh/acme.sh" --list
     
     return 0
 }
