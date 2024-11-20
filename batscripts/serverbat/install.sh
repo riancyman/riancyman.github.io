@@ -426,60 +426,51 @@ install_cert() {
 
     # 停止 web 服务
     systemctl stop nginx 2>/dev/null
-    systemctl stop apache2 2>/dev/null
 
-    # 检查并卸载现有的acme.sh
-    if [ -f "/root/.acme.sh/acme.sh" ]; then
-        log "INFO" "卸载现有 acme.sh..."
-        /root/.acme.sh/acme.sh --uninstall
-        rm -rf /root/.acme.sh
+    # 检查80端口
+    if netstat -tuln | grep -q ":80 "; then
+        log "ERROR" "80端口被占用，请先释放端口"
+        return 1
     fi
 
-    # 重新安装 acme.sh
+    # 安装 acme.sh
     log "INFO" "安装 acme.sh..."
     curl https://get.acme.sh | sh -s email="$email"
     if [ $? -ne 0 ]; then
         log "ERROR" "acme.sh 安装失败"
         return 1
     fi
+
     source "/root/.acme.sh/acme.sh.env"
 
     # 申请证书
     log "INFO" "申请证书..."
-    /root/.acme.sh/acme.sh --issue -d "${domain}" --standalone --force --debug
+    /root/.acme.sh/acme.sh --issue -d "${domain}" --standalone --force
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书申请失败"
         return 1
     fi
 
-    # 等待几秒确保证书文件生成完成
-    sleep 3
-
-    # 创建证书目录（如果不存在）
-    mkdir -p "/etc/trojan-go/cert"
-    
-    # 手动复制证书文件
-    log "INFO" "复制证书文件..."
+    log "INFO" "正在安装证书..."
+    # 使用正确的源文件路径进行复制
     \cp -f "/root/.acme.sh/${domain}_ecc/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
     \cp -f "/root/.acme.sh/${domain}_ecc/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
 
+    # 检查文件是否复制成功
     if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
-        log "ERROR" "证书文件复制失败，检查源文件是否存在："
+        log "ERROR" "证书文件复制失败，源文件位置:"
         ls -l "/root/.acme.sh/${domain}_ecc/"
         return 1
     fi
 
-    # 设置证书权限
+    # 设置权限
     chmod 644 "/etc/trojan-go/cert/${domain}.pem"
     chmod 644 "/etc/trojan-go/cert/${domain}.key"
-    
-    # 设置自动更新证书的 cronjob
-    log "INFO" "配置自动更新..."
-    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
-    /root/.acme.sh/acme.sh --install-cronjob
 
-    # 重启 web 服务
+    # 配置自动更新
+    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
+
     systemctl start nginx 2>/dev/null
 
     set_status CERT_INSTALLED 1
@@ -487,14 +478,10 @@ install_cert() {
     
     log "SUCCESS" "SSL 证书配置完成"
     
-    # 显示证书和密钥的位置
-    echo -e "\n证书文件位置："
-    echo "证书: /etc/trojan-go/cert/${domain}.pem"
-    echo "密钥: /etc/trojan-go/cert/${domain}.key"
-    
-    # 验证证书文件
-    echo -e "\n证书文件内容验证："
-    openssl x509 -in "/etc/trojan-go/cert/${domain}.pem" -text -noout | grep "Subject:"
+    # 显示证书信息
+    echo -e "\n证书位置："
+    echo "证书文件: /etc/trojan-go/cert/${domain}.pem"
+    echo "私钥文件: /etc/trojan-go/cert/${domain}.key"
     
     return 0
 }
