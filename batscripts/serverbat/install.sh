@@ -415,10 +415,10 @@ install_cert() {
         return 1
     fi
 
-    # 获取邮箱
+    # 获取邮箱（简化验证规则）
     local email
     read -p "请输入您的邮箱(用于证书申请和更新通知)：" email
-    if [ -z "$email" ] || ! echo "$email" | grep -q "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"; then
+    if [ -z "$email" ] || ! echo "$email" | grep -E "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$" > /dev/null; then
         log "ERROR" "请输入有效的邮箱地址"
         return 1
     fi
