@@ -421,7 +421,9 @@ install_cert() {
         log "INFO" "acme.sh 已安装，尝试更新..."
         ~/.acme.sh/acme.sh --upgrade
     else
-        curl -fsSL https://get.acme.sh | sh -s email=admin@example.com
+        # Grok协助修改
+        # curl -fsSL https://get.acme.sh | sh -s email=admin@example.com
+        curl -fsSL https://get.acme.sh | sh -s email=admin@example.com --force
         if [ $? -ne 0 ]; then
             log "ERROR" "acme.sh 安装失败"
             return 1
@@ -434,7 +436,8 @@ install_cert() {
     chmod 700 /etc/trojan-go/cert
 
     # 申请证书
-    ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \
+    # ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \ Grok协助修改
+    sudo /root/.acme.sh/acme.sh --issue -d ${domain} --standalone \
         --key-file /etc/trojan-go/cert/${domain}.key \
         --fullchain-file /etc/trojan-go/cert/${domain}.pem
 
