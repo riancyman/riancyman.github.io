@@ -413,64 +413,69 @@ install_cert() {
     # 先停止 Nginx
     systemctl stop nginx
 
-    # 安装 socat
-    apt install -y socat
+    # 检查80端口是否被占用
+    if ss -tlnp | grep -q ":80 "; then
+        log "ERROR" "80端口被占用，请先释放80端口"
+        return 1
+    fi
+
+    # 安装依赖
+    apt install -y socat curl
 
     # 创建证书目录
     mkdir -p /etc/trojan-go/cert
-    chmod 700 /etc/trojan-go/cert
+    chmod 755 /etc/trojan-go/cert
 
     # 安装 acme.sh
-    if [ ! -f ~/.acme.sh/acme.sh ]; then
+    if [ ! -f "/root/.acme.sh/acme.sh" ]; then
         curl https://get.acme.sh | sh -s email=admin@example.com
-        source ~/.bashrc
-        # 设置默认CA
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+        source "/root/.acme.sh/acme.sh.env"
     else
-        ~/.acme.sh/acme.sh --upgrade
+        log "INFO" "acme.sh 已安装，进行更新..."
+        /root/.acme.sh/acme.sh --upgrade
     fi
 
-    # 使用 standalone 模式申请证书
-    ~/.acme.sh/acme.sh --issue \
-        -d "${domain}" \
-        --standalone \
-        --keylength 2048 \
-        --cert-file /etc/trojan-go/cert/${domain}.pem \
-        --key-file /etc/trojan-go/cert/${domain}.key \
-        --fullchain-file /etc/trojan-go/cert/${domain}.pem \
-        --reloadcmd "systemctl restart nginx"
+    # 设置默认CA
+    /root/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+
+    log "INFO" "开始申请证书..."
+    
+    # 申请证书
+    /root/.acme.sh/acme.sh --issue -d ${domain} --standalone
 
     if [ $? -ne 0 ]; then
-        # 如果失败,尝试使用 DNS 验证模式
-        log "WARNING" "Standalone 模式申请失败,尝试使用 DNS 验证模式..."
-        ~/.acme.sh/acme.sh --issue \
-            -d "${domain}" \
-            --dns dns_cf \
-            --cert-file /etc/trojan-go/cert/${domain}.pem \
-            --key-file /etc/trojan-go/cert/${domain}.key \
-            --fullchain-file /etc/trojan-go/cert/${domain}.pem \
-            --reloadcmd "systemctl restart nginx"
-            
-        if [ $? -ne 0 ]; then
-            log "ERROR" "证书申请失败"
-            systemctl start nginx
-            return 1
-        fi
+        log "ERROR" "证书申请失败，请检查以下几点："
+        echo "1. 确保域名 ${domain} 已正确解析到服务器IP"
+        echo "2. 确保80端口没有被占用"
+        return 1
     fi
 
-    # 设置证书权限
-    chmod 644 /etc/trojan-go/cert/${domain}.pem
-    chmod 600 /etc/trojan-go/cert/${domain}.key
+    # 安装证书到 trojan-go 目录
+    /root/.acme.sh/acme.sh --install-cert -d ${domain} \
+        --key-file /etc/trojan-go/cert/${domain}.key \
+        --fullchain-file /etc/trojan-go/cert/${domain}.pem \
+        --reloadcmd "chmod 644 /etc/trojan-go/cert/${domain}.pem && chmod 644 /etc/trojan-go/cert/${domain}.key && systemctl restart nginx"
 
-    # 启动 Nginx
+    if [ $? -ne 0 ]; then
+        log "ERROR" "证书安装失败"
+        return 1
+    fi
+
+    # 设置自动更新
+    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
+
+    # 重启 Nginx
     systemctl start nginx
 
-    # 自动更新证书
-    ~/.acme.sh/acme.sh --upgrade --auto-upgrade
-
     set_status CERT_INSTALLED 1
-    set_status DOMAIN ${domain}
+    set_status DOMAIN "${domain}"
+    
     log "SUCCESS" "SSL 证书申请完成"
+    
+    # 显示证书信息
+    echo -e "\n证书信息："
+    /root/.acme.sh/acme.sh --list
+    
     return 0
 }
 
