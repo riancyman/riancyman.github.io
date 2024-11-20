@@ -415,6 +415,14 @@ install_cert() {
         return 1
     fi
 
+    # 由于是 DuckDNS 域名，需要 DuckDNS token
+    local token
+    read -p "请输入您的 DuckDNS token：" token
+    if [ -z "$token" ]; then
+        log "ERROR" "DuckDNS token 不能为空"
+        return 1
+    fi
+
     # 准备工作
     log "INFO" "开始准备..."
     apt update
@@ -423,15 +431,6 @@ install_cert() {
     # 创建必要的目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
-
-    # 停止 web 服务
-    systemctl stop nginx 2>/dev/null
-
-    # 检查80端口
-    if netstat -tuln | grep -q ":80 "; then
-        log "ERROR" "80端口被占用，请先释放端口"
-        return 1
-    fi
 
     # 安装 acme.sh
     log "INFO" "安装 acme.sh..."
@@ -443,9 +442,17 @@ install_cert() {
 
     source "/root/.acme.sh/acme.sh.env"
 
-    # 申请证书
+    # 设置 DuckDNS API
+    export DuckDNS_Token="$token"
+
+    # 申请证书（使用 DNS 模式）
     log "INFO" "申请证书..."
-    /root/.acme.sh/acme.sh --issue -d "${domain}" --standalone --force
+    /root/.acme.sh/acme.sh --issue \
+        --dns dns_duckdns \
+        -d "${domain}" \
+        --force \
+        --server letsencrypt \
+        --debug
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书申请失败"
@@ -454,13 +461,13 @@ install_cert() {
 
     log "INFO" "正在安装证书..."
     # 使用正确的源文件路径进行复制
-    \cp -f "/root/.acme.sh/${domain}_ecc/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
-    \cp -f "/root/.acme.sh/${domain}_ecc/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
+    \cp -f "/root/.acme.sh/${domain}/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
+    \cp -f "/root/.acme.sh/${domain}/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
 
     # 检查文件是否复制成功
     if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
         log "ERROR" "证书文件复制失败，源文件位置:"
-        ls -l "/root/.acme.sh/${domain}_ecc/"
+        ls -l "/root/.acme.sh/${domain}/"
         return 1
     fi
 
