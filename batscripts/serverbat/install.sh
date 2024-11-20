@@ -415,7 +415,6 @@ install_cert() {
         return 1
     fi
 
-    # 由于是 DuckDNS 域名，需要 DuckDNS token
     local token
     read -p "请输入您的 DuckDNS token：" token
     if [ -z "$token" ]; then
@@ -452,22 +451,27 @@ install_cert() {
         -d "${domain}" \
         --force \
         --server letsencrypt \
-        --debug
+        --debug \
+        --log "/var/log/acme.sh.log"
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书申请失败"
+        cat /var/log/acme.sh.log
         return 1
     fi
 
+    # 直接安装证书到指定位置
     log "INFO" "正在安装证书..."
-    # 使用正确的源文件路径进行复制
-    \cp -f "/root/.acme.sh/${domain}/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
-    \cp -f "/root/.acme.sh/${domain}/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
+    /root/.acme.sh/acme.sh --install-cert -d "${domain}" \
+        --key-file "/etc/trojan-go/cert/${domain}.key" \
+        --fullchain-file "/etc/trojan-go/cert/${domain}.pem" \
+        --reloadcmd "systemctl restart nginx"
 
-    # 检查文件是否复制成功
+    # 检查文件是否存在
     if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
-        log "ERROR" "证书文件复制失败，源文件位置:"
-        ls -l "/root/.acme.sh/${domain}/"
+        log "ERROR" "证书安装失败，查看 acme.sh 目录内容："
+        ls -la /root/.acme.sh/
+        ls -la "/root/.acme.sh/${domain}_ecc/"
         return 1
     fi
 
@@ -489,6 +493,10 @@ install_cert() {
     echo -e "\n证书位置："
     echo "证书文件: /etc/trojan-go/cert/${domain}.pem"
     echo "私钥文件: /etc/trojan-go/cert/${domain}.key"
+    
+    # 验证证书
+    echo -e "\n证书信息："
+    openssl x509 -in "/etc/trojan-go/cert/${domain}.pem" -text -noout | grep -E "Subject:|Not Before:|Not After:"
     
     return 0
 }
