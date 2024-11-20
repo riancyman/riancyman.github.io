@@ -437,7 +437,7 @@ install_cert() {
 
     # 申请证书
     # ~/.acme.sh/acme.sh --issue -d ${domain} --standalone \ Grok协助修改
-    sudo /root/.acme.sh/acme.sh --issue -d ${domain} --standalone \
+    sudo /root/.acme.sh/acme.sh --issue -d ${domain} --standalone --debug \
         --key-file /etc/trojan-go/cert/${domain}.key \
         --fullchain-file /etc/trojan-go/cert/${domain}.pem
 
