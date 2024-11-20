@@ -401,7 +401,6 @@ install_cert() {
         return 0
     fi
 
-    # 获取域名和邮箱
     local domain
     read -p "请输入你的域名：" domain
     if [ -z "$domain" ]; then
@@ -416,85 +415,68 @@ install_cert() {
         return 1
     fi
 
-    # 获取 DuckDNS token
-    local duckdns_token
-    read -p "请输入您的 DuckDNS token：" duckdns_token
-    if [ -z "$duckdns_token" ]; then
-        log "ERROR" "DuckDNS token 不能为空"
-        return 1
-    fi
-
-    # 安装必要的工具
-    log "INFO" "安装必要的工具..."
+    # 准备工作
+    log "INFO" "开始准备..."
     apt update
     apt install -y curl socat
 
-    # 创建证书目录
+    # 创建必要的目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
 
-    # 停止 Nginx
-    systemctl stop nginx
+    # 停止 web 服务
+    systemctl stop nginx 2>/dev/null
+    systemctl stop apache2 2>/dev/null
 
-    # 安装 acme.sh
-    log "INFO" "安装 acme.sh..."
+    # 安装或更新 acme.sh
     if [ -f "/root/.acme.sh/acme.sh" ]; then
-        log "INFO" "已存在 acme.sh，进行更新..."
+        log "INFO" "更新 acme.sh..."
         /root/.acme.sh/acme.sh --upgrade
     else
+        log "INFO" "安装 acme.sh..."
         curl https://get.acme.sh | sh -s email="$email"
+        . "/root/.acme.sh/acme.sh.env"
     fi
 
-    if [ ! -f "/root/.acme.sh/acme.sh" ]; then
-        log "ERROR" "acme.sh 安装失败"
-        return 1
-    fi
-
-    . "/root/.acme.sh/acme.sh.env"
-
-    # 设置 DuckDNS API
-    export DuckDNS_Token="$duckdns_token"
-
-    # 申请证书（使用 DNS 验证模式）
-    log "INFO" "开始申请证书..."
-    "/root/.acme.sh/acme.sh" --issue \
-        -d "${domain}" \
-        --dns dns_duckdns \
-        --force \
-        --debug \
-        --log "/var/log/acme.sh.log"
+    # 申请证书
+    log "INFO" "申请证书..."
+    /root/.acme.sh/acme.sh --issue -d "${domain}" --standalone --force
 
     if [ $? -ne 0 ]; then
-        log "ERROR" "证书申请失败，查看详细日志..."
-        tail -n 100 /var/log/acme.sh.log
+        log "ERROR" "证书申请失败"
         return 1
     fi
 
-    # 安装证书
-    "/root/.acme.sh/acme.sh" --install-cert -d "${domain}" \
-        --key-file /etc/trojan-go/cert/${domain}.key \
-        --fullchain-file /etc/trojan-go/cert/${domain}.pem \
-        --reloadcmd "systemctl restart nginx"
+    # 手动复制证书文件
+    log "INFO" "安装证书..."
+    cp "/root/.acme.sh/${domain}_ecc/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
+    cp "/root/.acme.sh/${domain}_ecc/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
 
-    if [ $? -ne 0 ]; then
-        log "ERROR" "证书安装失败"
+    if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
+        log "ERROR" "证书文件复制失败"
         return 1
     fi
 
-    # 设置权限
-    chmod 644 /etc/trojan-go/cert/${domain}.pem
-    chmod 644 /etc/trojan-go/cert/${domain}.key
+    # 设置证书权限
+    chmod 644 "/etc/trojan-go/cert/${domain}.pem"
+    chmod 644 "/etc/trojan-go/cert/${domain}.key"
 
     # 配置自动更新
-    "/root/.acme.sh/acme.sh" --upgrade --auto-upgrade
+    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
+    /root/.acme.sh/acme.sh --install-cronjob
 
-    # 重启 Nginx
-    systemctl start nginx
+    systemctl start nginx 2>/dev/null
 
     set_status CERT_INSTALLED 1
     set_status DOMAIN "${domain}"
     
-    log "SUCCESS" "SSL 证书申请完成"
+    log "SUCCESS" "SSL 证书配置完成"
+    
+    # 显示证书信息
+    echo -e "\n证书信息："
+    echo "证书路径: /etc/trojan-go/cert/${domain}.pem"
+    echo "私钥路径: /etc/trojan-go/cert/${domain}.key"
+    
     return 0
 }
 
