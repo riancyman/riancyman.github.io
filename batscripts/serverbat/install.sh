@@ -397,100 +397,22 @@ EOF
 
 # 申请 SSL 证书
 install_cert() {
-    if ! check_reinstall "SSL证书" "CERT_INSTALLED"; then
-        return 0
-    fi
-
-    local domain
-    read -p "请输入你的域名：" domain
-    if [ -z "$domain" ]; then
-        log "ERROR" "域名不能为空"
-        return 1
-    fi
-
-    local email
-    read -p "请输入您的邮箱(用于证书申请和更新通知)：" email
-    if [ -z "$email" ] || ! echo "$email" | grep "@" > /dev/null; then
-        log "ERROR" "请输入有效的邮箱地址"
-        return 1
-    fi
-
-    local token
-    read -p "请输入您的 DuckDNS token：" token
-    if [ -z "$token" ]; then
-        log "ERROR" "DuckDNS token 不能为空"
-        return 1
-    fi
-
-    # 准备工作
-    log "INFO" "开始准备..."
-    apt update
-    apt install -y curl socat
-
-    # 创建必要的目录
+    # 创建证书目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
 
-    # 安装 acme.sh
-    log "INFO" "安装 acme.sh..."
-    curl https://get.acme.sh | sh -s email="$email"
-    if [ $? -ne 0 ]; then
-        log "ERROR" "acme.sh 安装失败"
-        return 1
-    fi
-
-    source "/root/.acme.sh/acme.sh.env"
-
-    # 设置 DuckDNS API
-    export DuckDNS_Token="$token"
-
-    # 申请证书（使用 DNS 模式）
-    log "INFO" "申请证书..."
-    /root/.acme.sh/acme.sh --issue \
-        --dns dns_duckdns \
-        -d "${domain}" \
-        --force \
-        --server letsencrypt \
-        --debug \
-        --log "/var/log/acme.sh.log"
-
-    if [ $? -ne 0 ]; then
-        log "ERROR" "证书申请失败"
-        cat /var/log/acme.sh.log
-        return 1
-    fi
-
-    # 手动复制证书文件
-    log "INFO" "正在安装证书..."
-    cp "/root/.acme.sh/${domain}_ecc/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
-    cp "/root/.acme.sh/${domain}_ecc/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
-
-    if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
-        log "ERROR" "证书安装失败"
-        ls -la "/root/.acme.sh/${domain}_ecc/"
-        return 1
-    fi
+    # 复制证书和密钥（只复制，不改其他任何东西）
+    \cp -f /root/.acme.sh/ggtestblog.duckdns.org_ecc/ggtestblog.duckdns.org.cer /etc/trojan-go/cert/ggtestblog.duckdns.org.pem
+    \cp -f /root/.acme.sh/ggtestblog.duckdns.org_ecc/ggtestblog.duckdns.org.key /etc/trojan-go/cert/ggtestblog.duckdns.org.key
 
     # 设置权限
-    chmod 644 "/etc/trojan-go/cert/${domain}.pem"
-    chmod 644 "/etc/trojan-go/cert/${domain}.key"
-
-    systemctl start nginx 2>/dev/null
+    chmod 644 /etc/trojan-go/cert/ggtestblog.duckdns.org.pem
+    chmod 644 /etc/trojan-go/cert/ggtestblog.duckdns.org.key
 
     set_status CERT_INSTALLED 1
-    set_status DOMAIN "${domain}"
+    set_status DOMAIN "ggtestblog.duckdns.org"
     
     log "SUCCESS" "SSL 证书配置完成"
-    
-    # 显示证书信息
-    echo -e "\n证书位置："
-    echo "证书文件: /etc/trojan-go/cert/${domain}.pem"
-    echo "私钥文件: /etc/trojan-go/cert/${domain}.key"
-    
-    # 验证证书
-    echo -e "\n证书信息："
-    openssl x509 -in "/etc/trojan-go/cert/${domain}.pem" -text -noout | grep -E "Subject:|Not Before:|Not After:"
-    
     return 0
 }
 
