@@ -460,17 +460,13 @@ install_cert() {
         return 1
     fi
 
-    # 直接安装证书到指定位置
+    # 手动复制证书文件
     log "INFO" "正在安装证书..."
-    /root/.acme.sh/acme.sh --install-cert -d "${domain}" \
-        --key-file "/etc/trojan-go/cert/${domain}.key" \
-        --fullchain-file "/etc/trojan-go/cert/${domain}.pem" \
-        --reloadcmd "systemctl restart nginx"
+    cp "/root/.acme.sh/${domain}_ecc/fullchain.cer" "/etc/trojan-go/cert/${domain}.pem"
+    cp "/root/.acme.sh/${domain}_ecc/${domain}.key" "/etc/trojan-go/cert/${domain}.key"
 
-    # 检查文件是否存在
     if [ ! -f "/etc/trojan-go/cert/${domain}.pem" ] || [ ! -f "/etc/trojan-go/cert/${domain}.key" ]; then
-        log "ERROR" "证书安装失败，查看 acme.sh 目录内容："
-        ls -la /root/.acme.sh/
+        log "ERROR" "证书安装失败"
         ls -la "/root/.acme.sh/${domain}_ecc/"
         return 1
     fi
@@ -478,9 +474,6 @@ install_cert() {
     # 设置权限
     chmod 644 "/etc/trojan-go/cert/${domain}.pem"
     chmod 644 "/etc/trojan-go/cert/${domain}.key"
-
-    # 配置自动更新
-    /root/.acme.sh/acme.sh --upgrade --auto-upgrade
 
     systemctl start nginx 2>/dev/null
 
