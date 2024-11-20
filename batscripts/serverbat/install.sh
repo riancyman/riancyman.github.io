@@ -416,49 +416,25 @@ install_cert() {
         return 1
     fi
 
+    # 获取 DuckDNS token
+    local duckdns_token
+    read -p "请输入您的 DuckDNS token：" duckdns_token
+    if [ -z "$duckdns_token" ]; then
+        log "ERROR" "DuckDNS token 不能为空"
+        return 1
+    fi
+
     # 安装必要的工具
     log "INFO" "安装必要的工具..."
     apt update
-    apt install -y dnsutils curl socat
-
-    # 检查域名解析
-    log "INFO" "检查域名解析..."
-    local domain_ip=$(dig +short "${domain}")
-    local server_ip=$(curl -s http://ipv4.icanhazip.com)
-    
-    echo "域名 ${domain} 解析到的IP: ${domain_ip}"
-    echo "服务器当前IP: ${server_ip}"
-    
-    if [ -z "${domain_ip}" ]; then
-        log "ERROR" "域名未解析到任何IP地址"
-        return 1
-    fi
-    
-    if [ "${domain_ip}" != "${server_ip}" ]; then
-        log "ERROR" "域名未解析到当前服务器IP"
-        log "ERROR" "域名解析到: ${domain_ip}"
-        log "ERROR" "服务器IP: ${server_ip}"
-        return 1
-    fi
-
-    # 检查80端口
-    log "INFO" "检查80端口..."
-    if netstat -tuln | grep -q ":80 "; then
-        log "ERROR" "80端口被占用，尝试停止相关服务..."
-        systemctl stop nginx
-        systemctl stop apache2 2>/dev/null
-        sleep 2
-        
-        if netstat -tuln | grep -q ":80 "; then
-            log "ERROR" "无法释放80端口，请手动检查占用服务"
-            netstat -tuln | grep ":80 "
-            return 1
-        fi
-    fi
+    apt install -y curl socat
 
     # 创建证书目录
     mkdir -p /etc/trojan-go/cert
     chmod 755 /etc/trojan-go/cert
+
+    # 停止 Nginx
+    systemctl stop nginx
 
     # 安装 acme.sh
     log "INFO" "安装 acme.sh..."
@@ -476,11 +452,14 @@ install_cert() {
 
     . "/root/.acme.sh/acme.sh.env"
 
-    # 申请证书
+    # 设置 DuckDNS API
+    export DuckDNS_Token="$duckdns_token"
+
+    # 申请证书（使用 DNS 验证模式）
     log "INFO" "开始申请证书..."
     "/root/.acme.sh/acme.sh" --issue \
         -d "${domain}" \
-        --standalone \
+        --dns dns_duckdns \
         --force \
         --debug \
         --log "/var/log/acme.sh.log"
