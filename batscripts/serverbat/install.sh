@@ -407,10 +407,19 @@ install_cert() {
         return 1
     fi
 
+    # 获取域名
     local domain
     read -p "请输入你的域名：" domain
     if [ -z "$domain" ]; then
         log "ERROR" "域名不能为空"
+        return 1
+    fi
+
+    # 获取邮箱
+    local email
+    read -p "请输入您的邮箱(用于证书申请和更新通知)：" email
+    if [ -z "$email" ] || ! echo "$email" | grep -q "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"; then
+        log "ERROR" "请输入有效的邮箱地址"
         return 1
     fi
 
@@ -441,7 +450,7 @@ install_cert() {
         chmod +x acme.sh
         ./acme.sh --install \
             --home /root/.acme.sh \
-            --accountemail "admin@example.com"
+            --accountemail "$email"
         rm acme.sh
     fi
 
@@ -458,7 +467,8 @@ install_cert() {
         --standalone \
         --force \
         --server letsencrypt \
-        --keylength 2048
+        --keylength 2048 \
+        --debug
 
     if [ $? -ne 0 ]; then
         log "ERROR" "证书申请失败，请检查以下几点："
