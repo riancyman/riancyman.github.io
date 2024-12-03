@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.1.4
+# 版本: v1.1.5
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.1.4"
+VERSION="v1.1.5"
 
 # 检查是否为root用户
 check_root() {
@@ -530,50 +530,192 @@ configure_ports() {
 
 # 配置防火墙自启动
 configure_autostart() {
-    echo -e "\n${YELLOW}配置防火墙自启动...${NC}"
+    echo -e "\n${BLUE}配置防火墙自启动...${NC}"
     
-    if command -v ufw >/dev/null 2>&1; then
-        systemctl enable ufw
-        echo "UFW已设置为自启动"
+    # 检测当前主要使用的防火墙
+    local main_firewall=""
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        main_firewall="ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+        main_firewall="firewalld"
+    elif command -v iptables >/dev/null 2>&1; then
+        main_firewall="iptables"
     fi
-    
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        systemctl enable firewalld
-        echo "Firewalld已设置为自启动"
-    fi
-    
-    if command -v iptables >/dev/null 2>&1; then
-        if [ -f /etc/debian_version ]; then
-            systemctl enable netfilter-persistent
-        elif [ -f /etc/redhat-release ]; then
-            systemctl enable iptables
-        fi
-        echo "IPTables已设置为自启动"
-    fi
+
+    case "$main_firewall" in
+        "ufw")
+            echo -e "${BLUE}配置 UFW 自启动...${NC}"
+            if [ -f /etc/debian_version ]; then
+                # 对于 Debian/Ubuntu 系统
+                systemctl enable ufw >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}UFW已设置为自启动${NC}"
+                    # 确保其他防火墙服务不会自启动
+                    systemctl disable netfilter-persistent >/dev/null 2>&1
+                    systemctl disable iptables >/dev/null 2>&1
+                    systemctl disable firewalld >/dev/null 2>&1
+                else
+                    echo -e "${RED}UFW自启动设置失败${NC}"
+                fi
+            elif [ -f /etc/redhat-release ]; then
+                # 对于 RedHat/CentOS 系统
+                systemctl enable ufw >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}UFW已设置为自启动${NC}"
+                    # 确保其他防火墙服务不会自启动
+                    systemctl disable iptables >/dev/null 2>&1
+                    systemctl disable firewalld >/dev/null 2>&1
+                else
+                    echo -e "${RED}UFW自启动设置失败${NC}"
+                fi
+            fi
+            ;;
+            
+        "firewalld")
+            echo -e "${BLUE}配置 Firewalld 自启动...${NC}"
+            systemctl enable firewalld >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}Firewalld已设置为自启动${NC}"
+                # 确保其他防火墙服务不会自启动
+                systemctl disable ufw >/dev/null 2>&1
+                systemctl disable iptables >/dev/null 2>&1
+                systemctl disable netfilter-persistent >/dev/null 2>&1
+            else
+                echo -e "${RED}Firewalld自启动设置失败${NC}"
+            fi
+            ;;
+            
+        "iptables")
+            echo -e "${BLUE}配置 IPTables 自启动...${NC}"
+            if [ -f /etc/debian_version ]; then
+                # 对于 Debian/Ubuntu 系统
+                apt-get install -y iptables-persistent >/dev/null 2>&1
+                systemctl enable netfilter-persistent >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}IPTables已设置为自启动${NC}"
+                    # 确保其他防火墙服务不会自启动
+                    systemctl disable ufw >/dev/null 2>&1
+                    systemctl disable firewalld >/dev/null 2>&1
+                else
+                    echo -e "${RED}IPTables自启动设置失败${NC}"
+                fi
+            elif [ -f /etc/redhat-release ]; then
+                # 对于 RedHat/CentOS 系统
+                systemctl enable iptables >/dev/null 2>&1
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}IPTables已设置为自启动${NC}"
+                    # 确保其他防火墙服务不会自启动
+                    systemctl disable ufw >/dev/null 2>&1
+                    systemctl disable firewalld >/dev/null 2>&1
+                else
+                    echo -e "${RED}IPTables自启动设置失败${NC}"
+                fi
+            fi
+            ;;
+            
+        *)
+            echo -e "${RED}错误: 未检测到已安装的防火墙${NC}"
+            return 1
+            ;;
+    esac
+
+    # 验证配置结果
+    echo -e "\n${BLUE}验证防火墙自启动状态...${NC}"
+    case "$main_firewall" in
+        "ufw")
+            if systemctl is-enabled ufw >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ UFW 已正确配置为自启动${NC}"
+            else
+                echo -e "${RED}✗ UFW 未正确配置为自启动${NC}"
+            fi
+            ;;
+        "firewalld")
+            if systemctl is-enabled firewalld >/dev/null 2>&1; then
+                echo -e "${GREEN}✓ Firewalld 已正确配置为自启动${NC}"
+            else
+                echo -e "${RED}✗ Firewalld 未正确配置为自启动${NC}"
+            fi
+            ;;
+        "iptables")
+            if [ -f /etc/debian_version ]; then
+                if systemctl is-enabled netfilter-persistent >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ IPTables 已正确配置为自启动${NC}"
+                else
+                    echo -e "${RED}✗ IPTables 未正确配置为自启动${NC}"
+                fi
+            elif [ -f /etc/redhat-release ]; then
+                if systemctl is-enabled iptables >/dev/null 2>&1; then
+                    echo -e "${GREEN}✓ IPTables 已正确配置为自启动${NC}"
+                else
+                    echo -e "${RED}✗ IPTables 未正确配置为自启动${NC}"
+                fi
+            fi
+            ;;
+    esac
 }
 
 # 重启防火墙
 restart_firewall() {
     echo -e "\n${YELLOW}重启防火墙...${NC}"
     
-    if command -v ufw >/dev/null 2>&1; then
-        ufw disable && ufw enable
-        echo "UFW已重启"
+    # 获取当前活动的防火墙
+    local current_firewall=$(get_installed_firewall)
+    
+    if [ "$current_firewall" = "none" ]; then
+        echo -e "${RED}错误: 没有检测到正在运行的防火墙${NC}"
+        return 1
     fi
     
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        systemctl restart firewalld
-        echo "Firewalld已重启"
-    fi
+    echo -e "${BLUE}正在重启 $current_firewall...${NC}"
     
-    if command -v iptables >/dev/null 2>&1; then
-        if [ -f /etc/debian_version ]; then
-            systemctl restart netfilter-persistent
-        elif [ -f /etc/redhat-release ]; then
-            systemctl restart iptables
-        fi
-        echo "IPTables已重启"
-    fi
+    # 确保其他防火墙服务已停止
+    disable_other_firewalls "$current_firewall"
+    
+    case "$current_firewall" in
+        "ufw")
+            # 重启UFW
+            if ufw disable && sleep 2 && ufw enable; then
+                if ufw status | grep -q "Status: active"; then
+                    echo -e "${GREEN}UFW重启成功${NC}"
+                    return 0
+                fi
+            fi
+            echo -e "${RED}UFW重启失败${NC}"
+            ;;
+            
+        "firewalld")
+            # 重启Firewalld
+            if systemctl restart firewalld && sleep 2; then
+                if systemctl is-active firewalld >/dev/null 2>&1; then
+                    echo -e "${GREEN}Firewalld重启成功${NC}"
+                    return 0
+                fi
+            fi
+            echo -e "${RED}Firewalld重启失败${NC}"
+            ;;
+            
+        "iptables")
+            # 重启IPTables
+            if [ -f /etc/debian_version ]; then
+                if systemctl restart netfilter-persistent && sleep 2; then
+                    if systemctl is-active netfilter-persistent >/dev/null 2>&1; then
+                        echo -e "${GREEN}IPTables重启成功${NC}"
+                        return 0
+                    fi
+                fi
+            elif [ -f /etc/redhat-release ]; then
+                if systemctl restart iptables && sleep 2; then
+                    if systemctl is-active iptables >/dev/null 2>&1; then
+                        echo -e "${GREEN}IPTables重启成功${NC}"
+                        return 0
+                    fi
+                fi
+            fi
+            echo -e "${RED}IPTables重启失败${NC}"
+            ;;
+    esac
+    
+    return 1
 }
 
 # 卸载防火墙
