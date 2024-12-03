@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.15
+# 版本: v1.0.16
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -535,41 +535,76 @@ uninstall_firewall() {
 }
 
 # 检查诊断信息
-check_diagnostics() {
-    echo -e "\n${YELLOW}系统诊断信息:${NC}"
+check_diagnostic() {
+    echo -e "\n${BLUE}系统诊断信息:${NC}"
     
-    echo -e "\n${BLUE}系统信息:${NC}"
+    # 系统信息
+    echo -e "\n${YELLOW}系统信息:${NC}"
     uname -a
     
-    echo -e "\n${BLUE}防火墙服务状态:${NC}"
+    # 防火墙服务状态
+    echo -e "\n${YELLOW}防火墙服务状态:${NC}"
     if command -v ufw >/dev/null 2>&1; then
         echo "UFW状态:"
-        systemctl status ufw
+        systemctl status ufw 2>/dev/null || echo "UFW服务未安装"
     fi
     
     if command -v firewall-cmd >/dev/null 2>&1; then
-        echo "Firewalld状态:"
-        systemctl status firewalld
+        echo -e "\nFirewalld状态:"
+        systemctl status firewalld 2>/dev/null || echo "Firewalld服务未安装"
     fi
     
     if command -v iptables >/dev/null 2>&1; then
-        echo "IPTables规则:"
-        iptables -L -n -v
+        echo -e "\nIPTables规则:"
+        iptables -L -n 2>/dev/null || echo "IPTables未启用或无法访问"
     fi
     
-    echo -e "\n${BLUE}网络连接状态:${NC}"
-    sudo netstat -tunlp4 | grep "LISTEN" | awk '{split($4,a,":"); split($7,b,"/"); 
-        if(length(a[2])>0) printf "端口 %-6s: %s\n", a[2], b[2]}' | sort -n -k2
+    # 网络连接状态
+    echo -e "\n${YELLOW}网络连接状态:${NC}"
+    netstat -tunlp 2>/dev/null || ss -tunlp 2>/dev/null || echo "无法获取网络连接信息"
     
-    echo -e "\n已建立的连接:"
-    sudo netstat -tunp4 | grep "ESTABLISHED" | awk '{split($4,a,":"); 
-        if(length(a[2])>0) print a[2]}' | sort -n | uniq | while read port; do
-        echo -n "端口 $port: "
-        sudo netstat -tunp4 | grep ":$port" | head -1 | awk '{split($7,b,"/"); print b[2]}'
-    done
+    # 已建立的连接
+    echo -e "\n${YELLOW}已建立的连接:${NC}"
+    netstat -tn 2>/dev/null | grep ESTABLISHED || ss -tn 2>/dev/null | grep ESTAB || echo "无法获取已建立的连接信息"
     
-    echo -e "\n${BLUE}系统日志最后20行:${NC}"
-    tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages
+    # 系统日志
+    echo -e "\n${YELLOW}系统日志最后20行:${NC}"
+    if [ -f /var/log/syslog ]; then
+        tail -n 20 /var/log/syslog
+    elif [ -f /var/log/messages ]; then
+        tail -n 20 /var/log/messages
+    else
+        # 如果常规日志文件不存在，尝试从journalctl获取
+        journalctl -n 20 2>/dev/null || echo "无法访问系统日志"
+    fi
+    
+    # 防火墙相关日志
+    echo -e "\n${YELLOW}防火墙相关日志:${NC}"
+    if [ -f /var/log/ufw.log ]; then
+        echo "UFW日志最后10行:"
+        tail -n 10 /var/log/ufw.log
+    fi
+    
+    if [ -f /var/log/firewalld ]; then
+        echo -e "\nFirewalld日志最后10行:"
+        tail -n 10 /var/log/firewalld
+    fi
+    
+    # 显示系统资源使用情况
+    echo -e "\n${YELLOW}系统资源使用情况:${NC}"
+    echo "CPU和内存使用:"
+    top -b -n 1 | head -n 5
+    
+    echo -e "\n磁盘使用:"
+    df -h
+    
+    # 检查SELinux状态（如果存在）
+    if command -v getenforce >/dev/null 2>&1; then
+        echo -e "\n${YELLOW}SELinux状态:${NC}"
+        getenforce
+    fi
+    
+    echo -e "\n${GREEN}诊断信息收集完成${NC}"
 }
 
 # 主菜单
@@ -614,7 +649,7 @@ show_menu() {
                 uninstall_firewall
                 ;;
             7) 
-                check_diagnostics
+                check_diagnostic
                 ;;
             8) 
                 echo "退出程序"
