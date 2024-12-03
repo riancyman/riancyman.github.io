@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.1.3
+# 版本: v1.1.4
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.1.3"
+VERSION="v1.1.4"
 
 # 检查是否为root用户
 check_root() {
@@ -424,23 +424,24 @@ configure_ports() {
     echo -e "\n${YELLOW}当前开放的端口:${NC}"
     
     if command -v ufw >/dev/null 2>&1; then
-        current_ports=$(ufw status numbered | grep ALLOW | awk '{print $2}' | sort -u | tr '\n' ' ')
+        # 获取当前开放的端口，只获取端口号，去除其他信息
+        current_ports=$(ufw status | grep ALLOW | awk '{print $1}' | cut -d'/' -f1 | sort -n | uniq | tr '\n' ' ')
         if [ -n "$current_ports" ]; then
-            echo -e "TCP/UDP端口: $current_ports"
+            echo -e "TCP/UDP端口: ${GREEN}$current_ports${NC}"
         else
             echo -e "${BLUE}当前没有开放的端口${NC}"
         fi
     elif command -v firewall-cmd >/dev/null 2>&1; then
         current_ports=$(firewall-cmd --list-ports 2>/dev/null)
         if [ -n "$current_ports" ]; then
-            echo -e "TCP/UDP端口: $current_ports"
+            echo -e "TCP/UDP端口: ${GREEN}$current_ports${NC}"
         else
             echo -e "${BLUE}当前没有开放的端口${NC}"
         fi
     elif command -v iptables >/dev/null 2>&1; then
-        current_ports=$(iptables -L INPUT -n | grep ACCEPT | grep -oE "dpt:[0-9]+" | cut -d: -f2 | sort -u | tr '\n' ' ')
+        current_ports=$(iptables -L INPUT -n | grep ACCEPT | grep -oE "dpt:[0-9]+" | cut -d: -f2 | sort -n | uniq | tr '\n' ' ')
         if [ -n "$current_ports" ]; then
-            echo -e "TCP端口: $current_ports"
+            echo -e "TCP端口: ${GREEN}$current_ports${NC}"
         else
             echo -e "${BLUE}当前没有开放的端口${NC}"
         fi
@@ -448,30 +449,80 @@ configure_ports() {
 
     echo -e "\n${YELLOW}请输入要开放的端口（用逗号分隔，例如: 80,443,22）:${NC}"
     read -p "" ports
-    
+
     if [ -n "$ports" ]; then
+        # 移除所有空格
+        ports=$(echo "$ports" | tr -d ' ')
+        # 使用逗号分隔端口
         IFS=',' read -ra PORT_ARRAY <<< "$ports"
+        
         for port in "${PORT_ARRAY[@]}"; do
-            port=$(echo "$port" | tr -d ' ')
-            if [[ "$port" =~ ^[0-9]+$ ]]; then
-                if command -v ufw >/dev/null 2>&1; then
-                    ufw allow "$port/tcp" >/dev/null 2>&1
-                    ufw allow "$port/udp" >/dev/null 2>&1
-                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
-                elif command -v firewall-cmd >/dev/null 2>&1; then
-                    firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1
-                    firewall-cmd --permanent --add-port="$port/udp" >/dev/null 2>&1
-                    firewall-cmd --reload >/dev/null 2>&1
-                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
-                elif command -v iptables >/dev/null 2>&1; then
-                    iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
-                    iptables -A INPUT -p udp --dport "$port" -j ACCEPT
-                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
+            # 验证端口号是否有效
+            if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+                echo -e "${RED}无效的端口号: $port (端口号必须在 1-65535 之间)${NC}"
+                continue
+            fi
+            
+            # 检查端口是否已经开放
+            if command -v ufw >/dev/null 2>&1; then
+                if ufw status | grep -q "^$port/"; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
                 fi
-            else
-                echo -e "${RED}无效的端口号: $port${NC}"
+                # 添加新端口
+                ufw allow "$port/tcp" >/dev/null 2>&1
+                ufw allow "$port/udp" >/dev/null 2>&1
+                if ufw status | grep -q "^$port/"; then
+                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
+                else
+                    echo -e "${RED}端口 $port 开放失败${NC}"
+                fi
+            elif command -v firewall-cmd >/dev/null 2>&1; then
+                if firewall-cmd --query-port="$port/tcp" >/dev/null 2>&1; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
+                fi
+                firewall-cmd --permanent --add-port="$port/tcp" >/dev/null 2>&1
+                firewall-cmd --permanent --add-port="$port/udp" >/dev/null 2>&1
+                firewall-cmd --reload >/dev/null 2>&1
+                if firewall-cmd --query-port="$port/tcp" >/dev/null 2>&1; then
+                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
+                else
+                    echo -e "${RED}端口 $port 开放失败${NC}"
+                fi
+            elif command -v iptables >/dev/null 2>&1; then
+                if iptables -L INPUT -n | grep -q "dpt:$port"; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
+                fi
+                iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
+                iptables -A INPUT -p udp --dport "$port" -j ACCEPT
+                if iptables -L INPUT -n | grep -q "dpt:$port"; then
+                    echo -e "${GREEN}端口 $port 已开放 (TCP/UDP)${NC}"
+                else
+                    echo -e "${RED}端口 $port 开放失败${NC}"
+                fi
             fi
         done
+        
+        # 显示更新后的端口状态
+        echo -e "\n${YELLOW}当前开放的端口:${NC}"
+        if command -v ufw >/dev/null 2>&1; then
+            current_ports=$(ufw status | grep ALLOW | awk '{print $1}' | cut -d'/' -f1 | sort -n | uniq | tr '\n' ' ')
+            if [ -n "$current_ports" ]; then
+                echo -e "TCP/UDP端口: ${GREEN}$current_ports${NC}"
+            fi
+        elif command -v firewall-cmd >/dev/null 2>&1; then
+            current_ports=$(firewall-cmd --list-ports 2>/dev/null)
+            if [ -n "$current_ports" ]; then
+                echo -e "TCP/UDP端口: ${GREEN}$current_ports${NC}"
+            fi
+        elif command -v iptables >/dev/null 2>&1; then
+            current_ports=$(iptables -L INPUT -n | grep ACCEPT | grep -oE "dpt:[0-9]+" | cut -d: -f2 | sort -n | uniq | tr '\n' ' ')
+            if [ -n "$current_ports" ]; then
+                echo -e "TCP端口: ${GREEN}$current_ports${NC}"
+            fi
+        fi
     else
         echo -e "${YELLOW}未指定端口，跳过端口配置${NC}"
     fi
