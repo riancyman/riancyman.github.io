@@ -23,10 +23,10 @@
 # 使用方法:
 # 1. 远程调用(推荐):
 #    curl方式:
-#    curl -sSL https://example.com/scripts/ckfirewall.sh | sudo bash
+#    curl -sSL https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh | sudo bash
 #    
 #    wget方式:
-#    wget -qO- https://example.com/scripts/ckfirewall.sh | sudo bash
+#    wget -qO- https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh | sudo bash
 #
 # 2. 本地使用:
 #    下载后需要添加执行权限:
