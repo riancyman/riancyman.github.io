@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.9
+# 版本: v1.0.10
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -167,8 +167,14 @@ show_open_ports() {
             
             # 检查网络连接状态
             echo -e "\n当前活动连接:"
-            netstat -tunlp | grep -E "^tcp|^udp" | awk '{print $4}' | cut -d: -f2 | sort -n | uniq | while read port; do
-                echo "端口 $port: $(netstat -tunlp | grep ":$port" | awk '{print $7}' | cut -d/ -f2 | head -n1)"
+            sudo netstat -tunlp4 | grep "LISTEN" | awk '{split($4,a,":"); split($7,b,"/"); 
+                if(length(a[2])>0) printf "端口 %-6s: %s\n", a[2], b[2]}' | sort -n -k2
+            
+            echo -e "\n已建立的连接:"
+            sudo netstat -tunp4 | grep "ESTABLISHED" | awk '{split($4,a,":"); 
+                if(length(a[2])>0) print a[2]}' | sort -n | uniq | while read port; do
+                echo -n "端口 $port: "
+                sudo netstat -tunp4 | grep ":$port" | head -1 | awk '{split($7,b,"/"); print b[2]}'
             done
             ;;
         "firewalld")
@@ -450,7 +456,15 @@ check_diagnostics() {
     fi
     
     echo -e "\n${BLUE}网络连接状态:${NC}"
-    netstat -tulpn
+    sudo netstat -tunlp4 | grep "LISTEN" | awk '{split($4,a,":"); split($7,b,"/"); 
+        if(length(a[2])>0) printf "端口 %-6s: %s\n", a[2], b[2]}' | sort -n -k2
+    
+    echo -e "\n已建立的连接:"
+    sudo netstat -tunp4 | grep "ESTABLISHED" | awk '{split($4,a,":"); 
+        if(length(a[2])>0) print a[2]}' | sort -n | uniq | while read port; do
+        echo -n "端口 $port: "
+        sudo netstat -tunp4 | grep ":$port" | head -1 | awk '{split($7,b,"/"); print b[2]}'
+    done
     
     echo -e "\n${BLUE}系统日志最后20行:${NC}"
     tail -n 20 /var/log/syslog 2>/dev/null || tail -n 20 /var/log/messages
