@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.0
+# 版本: v1.0.1
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -363,6 +363,7 @@ check_diagnostics() {
 
 # 主菜单
 show_menu() {
+    MENU_SHOWN=0
     while true; do
         clear
         get_system_info
@@ -376,12 +377,21 @@ show_menu() {
         echo "7) 检查诊断信息"
         echo "8) 退出"
         echo ""
-        check_firewall_status
+        
+        # 只在首次显示菜单时检查防火墙状态
+        if [ -z "$MENU_SHOWN" ]; then
+            check_firewall_status
+            MENU_SHOWN=1
+        fi
+        
         echo -e "\n请选择操作 (1-8): "
         read choice
 
         case $choice in
-            1) check_firewall_status ;;
+            1) 
+                clear
+                check_firewall_status
+                ;;
             2) install_firewall ;;
             3) configure_ports ;;
             4) configure_autostart ;;
