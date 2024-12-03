@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.6
+# 版本: v1.0.7
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -206,17 +206,43 @@ install_firewall() {
     fi
 }
 
+# 获取已安装的防火墙类型
+get_installed_firewall() {
+    if command -v iptables >/dev/null 2>&1 && systemctl is-active iptables >/dev/null 2>&1; then
+        echo "iptables"
+    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
+        echo "firewalld"
+    elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        echo "ufw"
+    else
+        echo "none"
+    fi
+}
+
 # 配置端口
 configure_ports() {
-    echo -e "\n${YELLOW}当前开放的端口:${NC}"
+    local firewall_type=$(get_installed_firewall)
     
-    if command -v ufw >/dev/null 2>&1; then
-        ufw status numbered | grep -E "^[[0-9]+]"
-    elif command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --list-ports
-    elif command -v iptables >/dev/null 2>&1; then
-        iptables -L INPUT -n --line-numbers | grep "dpt:"
+    if [ "$firewall_type" = "none" ]; then
+        echo -e "${RED}错误: 未检测到正在运行的防火墙。请先安装并启动防火墙。${NC}"
+        return 1
     fi
+    
+    echo -e "\n${YELLOW}当前开放的端口:${NC}"
+    case $firewall_type in
+        "iptables")
+            echo -e "\n${BLUE}IPTables当前开放的端口:${NC}"
+            iptables -L INPUT -n --line-numbers | grep "dpt:" | sed 's/.*dpt:\([0-9]*\).*/\1/'
+            ;;
+        "firewalld")
+            echo -e "\n${BLUE}Firewalld当前开放的端口:${NC}"
+            firewall-cmd --list-ports
+            ;;
+        "ufw")
+            echo -e "\n${BLUE}UFW当前开放的端口:${NC}"
+            ufw status numbered | grep -E "^[[0-9]+]" | grep -oE "[0-9]+/[tcp|udp]" | sed 's/\/.*//'
+            ;;
+    esac
 
     echo -e "\n请输入要开放的端口（用逗号分隔，例如: 80,443,22）:"
     read ports
@@ -229,31 +255,56 @@ configure_ports() {
             continue
         fi
 
-        if command -v ufw >/dev/null 2>&1; then
-            ufw allow $port/tcp
-        elif command -v firewall-cmd >/dev/null 2>&1; then
-            firewall-cmd --permanent --add-port=$port/tcp
-        elif command -v iptables >/dev/null 2>&1; then
-            iptables -A INPUT -p tcp --dport $port -j ACCEPT
-        fi
-
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}端口 $port 已开放${NC}"
-        else
-            echo -e "${RED}开放端口 $port 失败${NC}"
-        fi
+        case $firewall_type in
+            "iptables")
+                # 检查端口是否已经开放
+                if iptables -L INPUT -n | grep "dpt:$port" >/dev/null 2>&1; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
+                fi
+                iptables -A INPUT -p tcp --dport $port -j ACCEPT
+                iptables -A INPUT -p udp --dport $port -j ACCEPT
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}端口 $port 已开放${NC}"
+                    # 保存规则
+                    if [ -f /etc/debian_version ]; then
+                        iptables-save > /etc/iptables/rules.v4
+                    elif [ -f /etc/redhat-release ]; then
+                        service iptables save
+                    fi
+                else
+                    echo -e "${RED}开放端口 $port 失败${NC}"
+                fi
+                ;;
+            "firewalld")
+                if firewall-cmd --query-port=$port/tcp >/dev/null 2>&1; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
+                fi
+                firewall-cmd --permanent --add-port=$port/tcp
+                firewall-cmd --permanent --add-port=$port/udp
+                firewall-cmd --reload
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}端口 $port 已开放${NC}"
+                else
+                    echo -e "${RED}开放端口 $port 失败${NC}"
+                fi
+                ;;
+            "ufw")
+                if ufw status | grep -q "^$port/tcp"; then
+                    echo -e "${YELLOW}端口 $port 已经开放${NC}"
+                    continue
+                fi
+                ufw allow $port/tcp
+                ufw allow $port/udp
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}端口 $port 已开放${NC}"
+                else
+                    echo -e "${RED}开放端口 $port 失败${NC}"
+                fi
+                ;;
+        esac
     done
-
-    # 保存更改
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --reload
-    elif command -v iptables >/dev/null 2>&1; then
-        if [ -f /etc/debian_version ]; then
-            iptables-save > /etc/iptables/rules.v4
-        elif [ -f /etc/redhat-release ]; then
-            service iptables save
-        fi
-    fi
 }
 
 # 配置防火墙自启动
