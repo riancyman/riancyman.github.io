@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.18
+# 版本: v1.1.1
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.0.18"
+VERSION="v1.1.1"
 
 # 检查是否为root用户
 check_root() {
@@ -564,85 +564,95 @@ uninstall_firewall() {
     
     # 清理 UFW
     if command -v ufw >/dev/null 2>&1; then
-        echo -e "\n${BLUE}清理 UFW...${NC}"
+        echo -e "${BLUE}清理 UFW 配置和规则...${NC}"
         ufw disable >/dev/null 2>&1
         ufw reset --force >/dev/null 2>&1
+        
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge ufw -y >/dev/null 2>&1
+            apt-get purge -y ufw >/dev/null 2>&1
             apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum remove ufw -y >/dev/null 2>&1
+            yum remove -y ufw >/dev/null 2>&1
         fi
-        rm -rf /etc/ufw >/dev/null 2>&1
-        echo -e "${GREEN}UFW 已完全清理${NC}"
+        
+        # 清理 UFW 配置文件
+        rm -f /etc/ufw/*.rules >/dev/null 2>&1
+        rm -f /etc/ufw/user.rules >/dev/null 2>&1
+        rm -f /etc/ufw/before.rules >/dev/null 2>&1
+        rm -f /etc/ufw/after.rules >/dev/null 2>&1
+        rm -f /etc/ufw/user6.rules >/dev/null 2>&1
+        rm -f /etc/ufw/before6.rules >/dev/null 2>&1
+        rm -f /etc/ufw/after6.rules >/dev/null 2>&1
     fi
-    
+
     # 清理 Firewalld
     if command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "\n${BLUE}清理 Firewalld...${NC}"
+        echo -e "${BLUE}清理 Firewalld 配置和规则...${NC}"
         systemctl stop firewalld >/dev/null 2>&1
         systemctl disable firewalld >/dev/null 2>&1
+        
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge firewalld -y >/dev/null 2>&1
+            apt-get purge -y firewalld >/dev/null 2>&1
             apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum remove firewalld -y >/dev/null 2>&1
+            yum remove -y firewalld >/dev/null 2>&1
         fi
-        rm -rf /etc/firewalld >/dev/null 2>&1
-        echo -e "${GREEN}Firewalld 已完全清理${NC}"
+        
+        # 清理 Firewalld 配置文件
+        rm -rf /etc/firewalld/* >/dev/null 2>&1
     fi
-    
+
     # 清理 IPTables
     if command -v iptables >/dev/null 2>&1; then
-        echo -e "\n${BLUE}清理 IPTables...${NC}"
+        echo -e "${BLUE}清理 IPTables 规则...${NC}"
         # 清空所有规则
-        iptables -F >/dev/null 2>&1
-        iptables -X >/dev/null 2>&1
-        iptables -t nat -F >/dev/null 2>&1
-        iptables -t nat -X >/dev/null 2>&1
-        iptables -t mangle -F >/dev/null 2>&1
-        iptables -t mangle -X >/dev/null 2>&1
-        iptables -P INPUT ACCEPT >/dev/null 2>&1
-        iptables -P FORWARD ACCEPT >/dev/null 2>&1
-        iptables -P OUTPUT ACCEPT >/dev/null 2>&1
+        iptables -F
+        iptables -X
+        iptables -t nat -F
+        iptables -t nat -X
+        iptables -t mangle -F
+        iptables -t mangle -X
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
         
-        # 删除 iptables 配置文件
+        if [ -f /etc/debian_version ]; then
+            apt-get purge -y iptables-persistent >/dev/null 2>&1
+            apt-get autoremove -y >/dev/null 2>&1
+        elif [ -f /etc/redhat-release ]; then
+            yum remove -y iptables-services >/dev/null 2>&1
+        fi
+        
+        # 清理 IPTables 保存的规则
         rm -f /etc/iptables/rules.v4 >/dev/null 2>&1
         rm -f /etc/iptables/rules.v6 >/dev/null 2>&1
         rm -f /etc/sysconfig/iptables >/dev/null 2>&1
         rm -f /etc/sysconfig/ip6tables >/dev/null 2>&1
-        
-        # 卸载 iptables 服务
-        if [ -f /etc/debian_version ]; then
-            apt-get remove --purge iptables -y >/dev/null 2>&1
-            apt-get autoremove -y >/dev/null 2>&1
-        elif [ -f /etc/redhat-release ]; then
-            yum remove iptables-services -y >/dev/null 2>&1
-        fi
-        echo -e "${GREEN}IPTables 已完全清理${NC}"
     fi
-    
-    echo -e "\n${GREEN}所有防火墙已完全清理，包括规则和配置文件${NC}"
-    
-    # 验证清理结果
-    echo -e "\n${YELLOW}验证清理结果:${NC}"
-    local has_remaining=false
+
+    # 检查是否还有防火墙残留
+    local has_residual=false
+    echo -e "\n${YELLOW}检查防火墙残留...${NC}"
     
     if command -v ufw >/dev/null 2>&1; then
         echo -e "${RED}警告: UFW 仍然存在${NC}"
-        has_remaining=true
-    fi
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "${RED}警告: Firewalld 仍然存在${NC}"
-        has_remaining=true
-    fi
-    if command -v iptables >/dev/null 2>&1; then
-        echo -e "${RED}警告: IPTables 仍然存在${NC}"
-        has_remaining=true
+        has_residual=true
     fi
     
-    if [ "$has_remaining" = false ]; then
-        echo -e "${GREEN}验证通过: 所有防火墙已成功清理${NC}"
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        echo -e "${RED}警告: Firewalld 仍然存在${NC}"
+        has_residual=true
+    fi
+    
+    if command -v iptables >/dev/null 2>&1 && ! iptables -L | grep -q "Chain .* (policy ACCEPT)"; then
+        echo -e "${RED}警告: IPTables 规则未完全清除${NC}"
+        has_residual=true
+    fi
+    
+    if [ "$has_residual" = false ]; then
+        echo -e "${GREEN}所有防火墙和相关配置已完全清除${NC}"
+    else
+        echo -e "${RED}部分防火墙组件或配置未能完全清除，建议手动检查${NC}"
     fi
 }
 
