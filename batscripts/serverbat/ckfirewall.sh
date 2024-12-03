@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.1.1
+# 版本: v1.1.2
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.1.1"
+VERSION="v1.1.2"
 
 # 检查是否为root用户
 check_root() {
@@ -59,12 +59,19 @@ check_firewall_status() {
     local iptables_active=false
     local current_firewall=""
 
+    echo -e "\n${YELLOW}防火墙状态检查:${NC}"
+
     # 检查 UFW
     if command -v ufw >/dev/null 2>&1; then
-        if ufw status | grep -q "Status: active"; then
+        if systemctl is-active ufw >/dev/null 2>&1 || ufw status 2>/dev/null | grep -q "Status: active"; then
             ufw_active=true
             current_firewall="UFW"
+            echo -e "${GREEN}UFW 状态: 正在运行${NC}"
+        else
+            echo -e "${YELLOW}UFW 状态: 已安装但未运行${NC}"
         fi
+    else
+        echo -e "${BLUE}UFW 状态: 未安装${NC}"
     fi
 
     # 检查 Firewalld
@@ -72,26 +79,38 @@ check_firewall_status() {
         if systemctl is-active firewalld >/dev/null 2>&1; then
             firewalld_active=true
             current_firewall="Firewalld"
-        fi
-    fi
-
-    # 检查 IPTables（仅当UFW未激活时才检查）
-    if ! $ufw_active && command -v iptables >/dev/null 2>&1; then
-        if iptables -L >/dev/null 2>&1 && ! iptables -L | grep -q "Chain .* (policy ACCEPT)"; then
-            iptables_active=true
-            [ -z "$current_firewall" ] && current_firewall="IPTables"
-        fi
-    fi
-
-    # 输出状态
-    echo -e "\n${YELLOW}防火墙状态检查:${NC}"
-    if [ -n "$current_firewall" ]; then
-        echo -e "${GREEN}当前使用的防火墙: $current_firewall${NC}"
-        if [ "$current_firewall" = "UFW" ] && $iptables_active; then
-            echo -e "${BLUE}注意: IPTables 被检测到是因为它是 UFW 的后端实现${NC}"
+            echo -e "${GREEN}Firewalld 状态: 正在运行${NC}"
+        else
+            echo -e "${YELLOW}Firewalld 状态: 已安装但未运行${NC}"
         fi
     else
-        echo -e "${RED}当前没有防火墙在运行${NC}"
+        echo -e "${BLUE}Firewalld 状态: 未安装${NC}"
+    fi
+
+    # 检查 IPTables
+    if command -v iptables >/dev/null 2>&1; then
+        if iptables -L >/dev/null 2>&1; then
+            if ! $ufw_active && ! iptables -L 2>/dev/null | grep -q "Chain .* (policy ACCEPT)"; then
+                iptables_active=true
+                [ -z "$current_firewall" ] && current_firewall="IPTables"
+                echo -e "${GREEN}IPTables 状态: 正在运行${NC}"
+            elif $ufw_active; then
+                echo -e "${BLUE}IPTables 状态: 作为 UFW 的后端运行${NC}"
+            else
+                echo -e "${YELLOW}IPTables 状态: 已安装但未配置规则${NC}"
+            fi
+        else
+            echo -e "${RED}IPTables 状态: 无法访问${NC}"
+        fi
+    else
+        echo -e "${BLUE}IPTables 状态: 未安装${NC}"
+    fi
+
+    # 总结
+    if [ -n "$current_firewall" ]; then
+        echo -e "\n${GREEN}当前主要防火墙: $current_firewall${NC}"
+    else
+        echo -e "\n${RED}当前没有防火墙在运行${NC}"
     fi
 }
 
@@ -575,14 +594,16 @@ uninstall_firewall() {
             yum remove -y ufw >/dev/null 2>&1
         fi
         
-        # 清理 UFW 配置文件
-        rm -f /etc/ufw/*.rules >/dev/null 2>&1
-        rm -f /etc/ufw/user.rules >/dev/null 2>&1
-        rm -f /etc/ufw/before.rules >/dev/null 2>&1
-        rm -f /etc/ufw/after.rules >/dev/null 2>&1
-        rm -f /etc/ufw/user6.rules >/dev/null 2>&1
-        rm -f /etc/ufw/before6.rules >/dev/null 2>&1
-        rm -f /etc/ufw/after6.rules >/dev/null 2>&1
+        # 清理 UFW 配置文件（使用通配符，避免文件不存在的错误）
+        if [ -d /etc/ufw ]; then
+            rm -rf /etc/ufw >/dev/null 2>&1
+        fi
+        if [ -d /lib/ufw ]; then
+            rm -rf /lib/ufw >/dev/null 2>&1
+        fi
+        if [ -d /etc/default/ufw ]; then
+            rm -f /etc/default/ufw >/dev/null 2>&1
+        fi
     fi
 
     # 清理 Firewalld
@@ -599,22 +620,24 @@ uninstall_firewall() {
         fi
         
         # 清理 Firewalld 配置文件
-        rm -rf /etc/firewalld/* >/dev/null 2>&1
+        if [ -d /etc/firewalld ]; then
+            rm -rf /etc/firewalld >/dev/null 2>&1
+        fi
     fi
 
     # 清理 IPTables
     if command -v iptables >/dev/null 2>&1; then
         echo -e "${BLUE}清理 IPTables 规则...${NC}"
         # 清空所有规则
-        iptables -F
-        iptables -X
-        iptables -t nat -F
-        iptables -t nat -X
-        iptables -t mangle -F
-        iptables -t mangle -X
-        iptables -P INPUT ACCEPT
-        iptables -P FORWARD ACCEPT
-        iptables -P OUTPUT ACCEPT
+        iptables -F 2>/dev/null
+        iptables -X 2>/dev/null
+        iptables -t nat -F 2>/dev/null
+        iptables -t nat -X 2>/dev/null
+        iptables -t mangle -F 2>/dev/null
+        iptables -t mangle -X 2>/dev/null
+        iptables -P INPUT ACCEPT 2>/dev/null
+        iptables -P FORWARD ACCEPT 2>/dev/null
+        iptables -P OUTPUT ACCEPT 2>/dev/null
         
         if [ -f /etc/debian_version ]; then
             apt-get purge -y iptables-persistent >/dev/null 2>&1
@@ -624,27 +647,30 @@ uninstall_firewall() {
         fi
         
         # 清理 IPTables 保存的规则
-        rm -f /etc/iptables/rules.v4 >/dev/null 2>&1
-        rm -f /etc/iptables/rules.v6 >/dev/null 2>&1
-        rm -f /etc/sysconfig/iptables >/dev/null 2>&1
-        rm -f /etc/sysconfig/ip6tables >/dev/null 2>&1
+        if [ -d /etc/iptables ]; then
+            rm -rf /etc/iptables >/dev/null 2>&1
+        fi
+        if [ -d /etc/sysconfig ]; then
+            rm -f /etc/sysconfig/iptables >/dev/null 2>&1
+            rm -f /etc/sysconfig/ip6tables >/dev/null 2>&1
+        fi
     fi
 
     # 检查是否还有防火墙残留
-    local has_residual=false
     echo -e "\n${YELLOW}检查防火墙残留...${NC}"
+    local has_residual=false
     
     if command -v ufw >/dev/null 2>&1; then
-        echo -e "${RED}警告: UFW 仍然存在${NC}"
+        echo -e "${RED}警告: UFW 命令仍然存在${NC}"
         has_residual=true
     fi
     
     if command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "${RED}警告: Firewalld 仍然存在${NC}"
+        echo -e "${RED}警告: Firewalld 命令仍然存在${NC}"
         has_residual=true
     fi
     
-    if command -v iptables >/dev/null 2>&1 && ! iptables -L | grep -q "Chain .* (policy ACCEPT)"; then
+    if command -v iptables >/dev/null 2>&1 && ! iptables -L 2>/dev/null | grep -q "Chain .* (policy ACCEPT)"; then
         echo -e "${RED}警告: IPTables 规则未完全清除${NC}"
         has_residual=true
     fi
