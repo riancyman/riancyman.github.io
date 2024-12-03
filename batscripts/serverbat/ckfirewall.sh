@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.12
+# 版本: v1.0.13
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -122,15 +122,25 @@ check_firewall_status() {
 
 # 获取已安装的防火墙类型
 get_installed_firewall() {
-    # 优先检查 UFW
-    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-        echo "ufw"
-        return 0
-    # 其次检查 firewalld
-    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    # 强制检查 UFW 是否在运行，如果在运行就只用 UFW
+    if command -v ufw >/dev/null 2>&1; then
+        if ufw status | grep -q "Status: active"; then
+            # UFW 正在运行，禁用其他防火墙
+            if systemctl is-active --quiet firewalld; then
+                systemctl stop firewalld
+            fi
+            if command -v iptables >/dev/null 2>&1; then
+                iptables -F
+            fi
+            echo "ufw"
+            return 0
+        fi
+    fi
+    
+    # 如果 UFW 没有运行，则检查其他防火墙
+    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
         echo "firewalld"
         return 0
-    # 最后检查 iptables
     elif command -v iptables >/dev/null 2>&1 && (iptables -L -n | grep -q '^Chain' || iptables -L -n | grep -q '^ACCEPT\|^DROP\|^REJECT'); then
         echo "iptables"
         return 0
@@ -260,6 +270,15 @@ configure_ports() {
     fi
     
     echo -e "\n${YELLOW}当前使用的防火墙: ${GREEN}$firewall_type${NC}"
+    
+    if [ "$firewall_type" != "ufw" ] && command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        echo -e "${RED}警告: 检测到 UFW 正在运行，但系统正在使用 $firewall_type${NC}"
+        echo -e "${YELLOW}建议: 请先关闭其他防火墙，专门使用 UFW${NC}"
+        read -p "是否继续？(y/n): " confirm
+        if [ "$confirm" != "y" ]; then
+            return 1
+        fi
+    fi
     
     # 显示当前开放的端口
     show_open_ports "$firewall_type"
