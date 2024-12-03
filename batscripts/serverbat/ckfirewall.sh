@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.1.6
+# 版本: v1.1.7
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.1.6"
+VERSION="v1.1.7"
 
 # 检查是否为root用户
 check_root() {
@@ -67,6 +67,13 @@ check_firewall_status() {
             ufw_active=true
             current_firewall="UFW"
             echo -e "${GREEN}UFW 状态: 正在运行${NC}"
+            echo -e "\n${BLUE}UFW 开放的端口:${NC}"
+            ufw status numbered | grep -E "^[[[:space:]]*[0-9]" | sed 's/\[//g;s/\]//g' | while read -r line; do
+                port=$(echo "$line" | grep -oE '[0-9]+/(tcp|udp)')
+                if [ -n "$port" ]; then
+                    echo -e "${GREEN}端口 $port${NC}"
+                fi
+            done
         else
             echo -e "${YELLOW}UFW 状态: 已安装但未运行${NC}"
         fi
@@ -80,6 +87,15 @@ check_firewall_status() {
             firewalld_active=true
             current_firewall="Firewalld"
             echo -e "${GREEN}Firewalld 状态: 正在运行${NC}"
+            echo -e "\n${BLUE}Firewalld 开放的端口:${NC}"
+            echo -e "${GREEN}TCP端口:${NC}"
+            firewall-cmd --list-ports 2>/dev/null | tr ' ' '\n' | grep "tcp" | while read -r port; do
+                echo -e "端口 $port"
+            done
+            echo -e "${GREEN}UDP端口:${NC}"
+            firewall-cmd --list-ports 2>/dev/null | tr ' ' '\n' | grep "udp" | while read -r port; do
+                echo -e "端口 $port"
+            done
         else
             echo -e "${YELLOW}Firewalld 状态: 已安装但未运行${NC}"
         fi
@@ -94,6 +110,15 @@ check_firewall_status() {
                 iptables_active=true
                 [ -z "$current_firewall" ] && current_firewall="IPTables"
                 echo -e "${GREEN}IPTables 状态: 正在运行${NC}"
+                echo -e "\n${BLUE}IPTables 开放的端口:${NC}"
+                echo -e "${GREEN}TCP端口:${NC}"
+                iptables -L INPUT -n -v | grep -E "^[[:space:]]*[0-9]+" | grep "tcp dpt:" | sed -E 's/.*dpt:([0-9]+).*/\1/' | sort -n | uniq | while read -r port; do
+                    echo -e "端口 $port/tcp"
+                done
+                echo -e "${GREEN}UDP端口:${NC}"
+                iptables -L INPUT -n -v | grep -E "^[[:space:]]*[0-9]+" | grep "udp dpt:" | sed -E 's/.*dpt:([0-9]+).*/\1/' | sort -n | uniq | while read -r port; do
+                    echo -e "端口 $port/udp"
+                done
             elif $ufw_active; then
                 echo -e "${BLUE}IPTables 状态: 作为 UFW 的后端运行${NC}"
             else

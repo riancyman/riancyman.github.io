@@ -1,5 +1,8 @@
 #!/bin/bash
 # install.sh - Debian 12 一键安装 Trojan-Go 管理脚本
+# curl -O "https://riancyman.github.io/batscripts/serverbat/install.sh"
+# sudo bash install.sh
+
 
 # 状态文件路径
 INSTALL_STATUS_DIR="/etc/trojan-go"
