@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.5
+# 版本: v1.0.6
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -73,9 +73,9 @@ check_firewall_status() {
     local firewall_found=false
     
     # 检查UFW
+    echo -e "\nUFW状态:"
     if command -v ufw >/dev/null 2>&1; then
         firewall_found=true
-        echo -e "\nUFW状态:"
         echo "版本: $(ufw version | head -n1)"
         if systemctl is-enabled ufw >/dev/null 2>&1; then
             echo -e "启用状态: ${GREEN}已启用${NC}"
@@ -87,50 +87,52 @@ check_firewall_status() {
         else
             echo -e "运行状态: ${RED}未运行${NC}"
         fi
+    else
+        echo -e "版本: ${RED}未安装${NC}"
+        echo -e "启用状态: ${RED}未安装${NC}"
+        echo -e "运行状态: ${RED}未安装${NC}"
     fi
 
     # 检查Firewalld
-    if systemctl list-unit-files firewalld.service >/dev/null 2>&1; then
+    echo -e "\nFirewalld状态:"
+    if command -v firewall-cmd >/dev/null 2>&1; then
         firewall_found=true
-        echo -e "\nFirewalld状态:"
-        if command -v firewall-cmd >/dev/null 2>&1; then
-            echo "版本: $(firewall-cmd --version 2>/dev/null)"
-        else
-            echo "版本: 未安装"
-        fi
-        
-        # 检查是否启用
+        echo "版本: $(firewall-cmd --version 2>/dev/null)"
         if systemctl is-enabled firewalld >/dev/null 2>&1; then
             echo -e "启用状态: ${GREEN}已启用${NC}"
         else
             echo -e "启用状态: ${RED}未启用${NC}"
         fi
-        
-        # 检查是否运行
         if systemctl is-active firewalld >/dev/null 2>&1; then
             echo -e "运行状态: ${GREEN}运行中${NC}"
         else
             echo -e "运行状态: ${RED}未运行${NC}"
         fi
+    else
+        echo -e "版本: ${RED}未安装${NC}"
+        echo -e "启用状态: ${RED}未安装${NC}"
+        echo -e "运行状态: ${RED}未安装${NC}"
     fi
 
     # 检查IPTables
+    echo -e "\nIPTables状态:"
     if command -v iptables >/dev/null 2>&1; then
         firewall_found=true
-        echo -e "\nIPTables状态:"
         echo "版本: $(iptables --version)"
-        # 检查是否启用
         if systemctl is-enabled iptables >/dev/null 2>&1; then
             echo -e "启用状态: ${GREEN}已启用${NC}"
         else
             echo -e "启用状态: ${RED}未启用${NC}"
         fi
-        # 检查是否可用
         if iptables -L >/dev/null 2>&1; then
             echo -e "运行状态: ${GREEN}可用${NC}"
         else
             echo -e "运行状态: ${RED}不可用${NC}"
         fi
+    else
+        echo -e "版本: ${RED}未安装${NC}"
+        echo -e "启用状态: ${RED}未安装${NC}"
+        echo -e "运行状态: ${RED}未安装${NC}"
     fi
 
     # 如果没有找到任何防火墙
