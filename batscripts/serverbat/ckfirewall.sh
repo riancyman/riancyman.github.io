@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.1.5
+# 版本: v1.1.6
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.1.5"
+VERSION="v1.1.6"
 
 # 检查是否为root用户
 check_root() {
@@ -697,9 +697,26 @@ restart_firewall() {
         "iptables")
             # 重启IPTables
             if [ -f /etc/debian_version ]; then
-                if systemctl restart netfilter-persistent && sleep 2; then
-                    if systemctl is-active netfilter-persistent >/dev/null 2>&1; then
-                        echo -e "${GREEN}IPTables重启成功${NC}"
+                # 检查是否安装了netfilter-persistent
+                if ! dpkg -l | grep -q "^ii.*iptables-persistent"; then
+                    echo -e "${YELLOW}正在安装 iptables-persistent...${NC}"
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent >/dev/null 2>&1
+                fi
+                
+                if systemctl is-enabled netfilter-persistent >/dev/null 2>&1; then
+                    if systemctl restart netfilter-persistent && sleep 2; then
+                        if systemctl is-active netfilter-persistent >/dev/null 2>&1; then
+                            echo -e "${GREEN}IPTables重启成功${NC}"
+                            return 0
+                        fi
+                    fi
+                else
+                    # 如果服务不存在，尝试保存和重新加载规则
+                    if iptables-save > /etc/iptables/rules.v4 && \
+                       ip6tables-save > /etc/iptables/rules.v6 && \
+                       iptables-restore < /etc/iptables/rules.v4 && \
+                       ip6tables-restore < /etc/iptables/rules.v6; then
+                        echo -e "${GREEN}IPTables规则已重新加载${NC}"
                         return 0
                     fi
                 fi
@@ -720,106 +737,80 @@ restart_firewall() {
 
 # 卸载防火墙
 uninstall_firewall() {
-    echo -e "\n${YELLOW}正在卸载防火墙...${NC}"
+    echo -e "\n${YELLOW}卸载防火墙...${NC}"
     
-    # 清理 UFW
+    local has_changes=false
+    
+    # UFW卸载
     if command -v ufw >/dev/null 2>&1; then
-        echo -e "${BLUE}清理 UFW 配置和规则...${NC}"
+        echo -e "${BLUE}正在卸载UFW...${NC}"
         ufw disable >/dev/null 2>&1
-        ufw reset --force >/dev/null 2>&1
-        
         if [ -f /etc/debian_version ]; then
-            apt-get purge -y ufw >/dev/null 2>&1
+            apt-get remove --purge -y ufw >/dev/null 2>&1
             apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
             yum remove -y ufw >/dev/null 2>&1
         fi
-        
-        # 清理 UFW 配置文件（使用通配符，避免文件不存在的错误）
-        if [ -d /etc/ufw ]; then
-            rm -rf /etc/ufw >/dev/null 2>&1
-        fi
-        if [ -d /lib/ufw ]; then
-            rm -rf /lib/ufw >/dev/null 2>&1
-        fi
-        if [ -d /etc/default/ufw ]; then
-            rm -f /etc/default/ufw >/dev/null 2>&1
-        fi
+        # 等待UFW完全卸载
+        for i in {1..10}; do
+            if ! command -v ufw >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        has_changes=true
     fi
-
-    # 清理 Firewalld
+    
+    # Firewalld卸载
     if command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "${BLUE}清理 Firewalld 配置和规则...${NC}"
+        echo -e "${BLUE}正在卸载Firewalld...${NC}"
         systemctl stop firewalld >/dev/null 2>&1
         systemctl disable firewalld >/dev/null 2>&1
-        
         if [ -f /etc/debian_version ]; then
-            apt-get purge -y firewalld >/dev/null 2>&1
+            apt-get remove --purge -y firewalld >/dev/null 2>&1
             apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
             yum remove -y firewalld >/dev/null 2>&1
         fi
-        
-        # 清理 Firewalld 配置文件
-        if [ -d /etc/firewalld ]; then
-            rm -rf /etc/firewalld >/dev/null 2>&1
-        fi
+        # 等待Firewalld完全卸载
+        for i in {1..10}; do
+            if ! command -v firewall-cmd >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        has_changes=true
     fi
-
-    # 清理 IPTables
+    
+    # IPTables卸载
     if command -v iptables >/dev/null 2>&1; then
-        echo -e "${BLUE}清理 IPTables 规则...${NC}"
-        # 清空所有规则
-        iptables -F 2>/dev/null
-        iptables -X 2>/dev/null
-        iptables -t nat -F 2>/dev/null
-        iptables -t nat -X 2>/dev/null
-        iptables -t mangle -F 2>/dev/null
-        iptables -t mangle -X 2>/dev/null
-        iptables -P INPUT ACCEPT 2>/dev/null
-        iptables -P FORWARD ACCEPT 2>/dev/null
-        iptables -P OUTPUT ACCEPT 2>/dev/null
-        
+        echo -e "${BLUE}正在卸载IPTables...${NC}"
         if [ -f /etc/debian_version ]; then
-            apt-get purge -y iptables-persistent >/dev/null 2>&1
+            apt-get remove --purge -y iptables-persistent >/dev/null 2>&1
             apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
+            systemctl stop iptables >/dev/null 2>&1
+            systemctl disable iptables >/dev/null 2>&1
             yum remove -y iptables-services >/dev/null 2>&1
         fi
-        
-        # 清理 IPTables 保存的规则
-        if [ -d /etc/iptables ]; then
-            rm -rf /etc/iptables >/dev/null 2>&1
-        fi
-        if [ -d /etc/sysconfig ]; then
-            rm -f /etc/sysconfig/iptables >/dev/null 2>&1
-            rm -f /etc/sysconfig/ip6tables >/dev/null 2>&1
-        fi
-    fi
-
-    # 检查是否还有防火墙残留
-    echo -e "\n${YELLOW}检查防火墙残留...${NC}"
-    local has_residual=false
-    
-    if command -v ufw >/dev/null 2>&1; then
-        echo -e "${RED}警告: UFW 命令仍然存在${NC}"
-        has_residual=true
+        # 等待IPTables服务完全卸载
+        for i in {1..10}; do
+            if ! systemctl is-active iptables >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        has_changes=true
     fi
     
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        echo -e "${RED}警告: Firewalld 命令仍然存在${NC}"
-        has_residual=true
-    fi
-    
-    if command -v iptables >/dev/null 2>&1 && ! iptables -L 2>/dev/null | grep -q "Chain .* (policy ACCEPT)"; then
-        echo -e "${RED}警告: IPTables 规则未完全清除${NC}"
-        has_residual=true
-    fi
-    
-    if [ "$has_residual" = false ]; then
-        echo -e "${GREEN}所有防火墙和相关配置已完全清除${NC}"
+    if [ "$has_changes" = true ]; then
+        echo -e "${GREEN}防火墙卸载完成${NC}"
+        # 等待系统完成所有卸载操作
+        sleep 3
+        return 0
     else
-        echo -e "${RED}部分防火墙组件或配置未能完全清除，建议手动检查${NC}"
+        echo -e "${YELLOW}没有检测到已安装的防火墙${NC}"
+        return 1
     fi
 }
 
