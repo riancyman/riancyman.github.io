@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.14
+# 版本: v1.0.15
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -72,22 +72,37 @@ check_firewall_status() {
     
     echo -e "\n${YELLOW}检查防火墙状态...${NC}"
     
-    # 检查 iptables
-    if command -v iptables >/dev/null 2>&1; then
-        echo -e "\n${BLUE}IPTables状态:${NC}"
-        # 检查是否有任何规则
-        if iptables -L -n | grep -q '^Chain' || iptables -L -n | grep -q '^ACCEPT\|^DROP\|^REJECT'; then
-            echo -e "${GREEN}IPTables 已配置${NC}"
+    # 检查 UFW
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*ufw"; then
+        echo -e "\n${BLUE}UFW状态:${NC}"
+        if systemctl is-active --quiet ufw; then
+            echo -e "${GREEN}UFW 正在运行${NC}"
             firewall_found=true
         else
-            echo -e "${YELLOW}IPTables 已安装但没有配置规则${NC}"
+            echo -e "${YELLOW}UFW 已安装但未运行${NC}"
+        fi
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "ufw"; then
+        echo -e "\n${BLUE}UFW状态:${NC}"
+        if systemctl is-active --quiet ufw; then
+            echo -e "${GREEN}UFW 正在运行${NC}"
+            firewall_found=true
+        else
+            echo -e "${YELLOW}UFW 已安装但未运行${NC}"
         fi
     else
-        echo -e "${YELLOW}IPTables 未安装${NC}"
+        echo -e "\n${BLUE}UFW状态: ${YELLOW}未安装${NC}"
     fi
     
-    # 检查 firewalld
-    if command -v firewall-cmd >/dev/null 2>&1; then
+    # 检查 Firewalld
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*firewalld"; then
+        echo -e "\n${BLUE}Firewalld状态:${NC}"
+        if systemctl is-active --quiet firewalld; then
+            echo -e "${GREEN}Firewalld 正在运行${NC}"
+            firewall_found=true
+        else
+            echo -e "${YELLOW}Firewalld 已安装但未运行${NC}"
+        fi
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "firewalld"; then
         echo -e "\n${BLUE}Firewalld状态:${NC}"
         if systemctl is-active --quiet firewalld; then
             echo -e "${GREEN}Firewalld 正在运行${NC}"
@@ -96,22 +111,30 @@ check_firewall_status() {
             echo -e "${YELLOW}Firewalld 已安装但未运行${NC}"
         fi
     else
-        echo -e "${YELLOW}Firewalld 未安装${NC}"
+        echo -e "\n${BLUE}Firewalld状态: ${YELLOW}未安装${NC}"
     fi
     
-    # 检查 ufw
-    if command -v ufw >/dev/null 2>&1; then
-        echo -e "\n${BLUE}UFW状态:${NC}"
-        if ufw status | grep -q "Status: active"; then
-            echo -e "${GREEN}UFW 正在运行${NC}"
+    # 检查 IPTables
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*iptables"; then
+        echo -e "\n${BLUE}IPTables状态:${NC}"
+        if iptables -L -n >/dev/null 2>&1; then
+            echo -e "${GREEN}IPTables 可用${NC}"
             firewall_found=true
         else
-            echo -e "${YELLOW}UFW 已安装但未启用${NC}"
+            echo -e "${YELLOW}IPTables 已安装但不可用${NC}"
+        fi
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "iptables-services"; then
+        echo -e "\n${BLUE}IPTables状态:${NC}"
+        if iptables -L -n >/dev/null 2>&1; then
+            echo -e "${GREEN}IPTables 可用${NC}"
+            firewall_found=true
+        else
+            echo -e "${YELLOW}IPTables 已安装但不可用${NC}"
         fi
     else
-        echo -e "${YELLOW}UFW 未安装${NC}"
+        echo -e "\n${BLUE}IPTables状态: ${YELLOW}未安装${NC}"
     fi
-    
+
     if [ "$firewall_found" = false ]; then
         echo -e "\n${RED}警告: 未检测到正在运行的防火墙${NC}"
         return 1
@@ -122,32 +145,35 @@ check_firewall_status() {
 
 # 获取已安装的防火墙类型
 get_installed_firewall() {
-    # 强制检查 UFW 是否在运行，如果在运行就只用 UFW
-    if command -v ufw >/dev/null 2>&1; then
-        if ufw status | grep -q "Status: active"; then
-            # UFW 正在运行，禁用其他防火墙
-            if systemctl is-active --quiet firewalld; then
-                systemctl stop firewalld
-            fi
-            if command -v iptables >/dev/null 2>&1; then
-                iptables -F
-            fi
-            echo "ufw"
-            return 0
-        fi
+    # 检查 UFW
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*ufw" && systemctl is-active --quiet ufw; then
+        echo "ufw"
+        return 0
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "ufw" && systemctl is-active --quiet ufw; then
+        echo "ufw"
+        return 0
     fi
     
-    # 如果 UFW 没有运行，则检查其他防火墙
-    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+    # 检查 Firewalld
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*firewalld" && systemctl is-active --quiet firewalld; then
         echo "firewalld"
         return 0
-    elif command -v iptables >/dev/null 2>&1 && (iptables -L -n | grep -q '^Chain' || iptables -L -n | grep -q '^ACCEPT\|^DROP\|^REJECT'); then
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "firewalld" && systemctl is-active --quiet firewalld; then
+        echo "firewalld"
+        return 0
+    fi
+    
+    # 检查 IPTables
+    if [ -f /etc/debian_version ] && dpkg -l | grep -q "^ii.*iptables" && iptables -L -n >/dev/null 2>&1; then
         echo "iptables"
         return 0
-    else
-        echo "none"
-        return 1
+    elif [ -f /etc/redhat-release ] && rpm -qa | grep -q "iptables-services" && iptables -L -n >/dev/null 2>&1; then
+        echo "iptables"
+        return 0
     fi
+    
+    echo "none"
+    return 1
 }
 
 # 显示当前开放的端口
