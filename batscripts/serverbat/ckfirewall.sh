@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.3
+# 版本: v1.0.4
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -378,78 +378,60 @@ check_diagnostics() {
 
 # 主菜单
 show_menu() {
-    local first_run=true
-    local MENU_REFRESH=""
-    
     while true; do
-        if [ "$first_run" = true ] || [ -n "$MENU_REFRESH" ]; then
-            clear
-            get_system_info
-            echo -e "\n${YELLOW}防火墙管理菜单${NC}"
-            echo "1) 检查防火墙状态"
-            echo "2) 重装防火墙"
-            echo "3) 配置防火墙端口"
-            echo "4) 开启防火墙自动重启"
-            echo "5) 重启防火墙"
-            echo "6) 卸载防火墙"
-            echo "7) 检查诊断信息"
-            echo "8) 退出"
-            echo ""
-            
-            if [ "$first_run" = true ]; then
-                check_firewall_status
-                first_run=false
-            fi
-            MENU_REFRESH=""
-        fi
+        clear
+        get_system_info
+        echo -e "\n${YELLOW}防火墙管理菜单${NC}"
+        echo "1) 检查防火墙状态"
+        echo "2) 重装防火墙"
+        echo "3) 配置防火墙端口"
+        echo "4) 开启防火墙自动重启"
+        echo "5) 重启防火墙"
+        echo "6) 卸载防火墙"
+        echo "7) 检查诊断信息"
+        echo "8) 退出"
+        echo ""
+        echo -e "请选择操作 (1-8): "
         
-        echo -e "\n请选择操作 (1-8): "
-        read choice
-
-        case $choice in
+        # 读取用户输入
+        read choice </dev/tty || exit 1
+        
+        # 处理用户选择
+        case "$choice" in
             1) 
                 clear
                 check_firewall_status
-                MENU_REFRESH=true
                 ;;
             2) 
                 install_firewall
-                MENU_REFRESH=true
                 ;;
             3) 
                 configure_ports
-                MENU_REFRESH=true
                 ;;
             4) 
                 configure_autostart
-                MENU_REFRESH=true
                 ;;
             5) 
                 restart_firewall
-                MENU_REFRESH=true
                 ;;
             6) 
                 uninstall_firewall
-                MENU_REFRESH=true
                 ;;
             7) 
                 check_diagnostics
-                MENU_REFRESH=true
                 ;;
             8) 
                 echo "退出程序"
-                exit 0 
+                exit 0
                 ;;
-            *) 
+            *)
                 echo -e "${RED}无效选择${NC}"
-                MENU_REFRESH=true
                 ;;
         esac
 
-        if [ "$choice" != "8" ]; then
-            echo -e "\n按回车键继续..."
-            read
-        fi
+        # 等待用户按回车继续
+        echo -e "\n按回车键继续..."
+        read -p "" </dev/tty || exit 1
     done
 }
 
