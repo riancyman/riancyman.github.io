@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.10
+# 版本: v1.0.11
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -68,77 +68,72 @@ get_system_info() {
 
 # 检查防火墙状态
 check_firewall_status() {
-    echo -e "\n${YELLOW}检查防火墙状态...${NC}"
-    
     local firewall_found=false
     
-    # 检查UFW
-    echo -e "\nUFW状态:"
-    if command -v ufw >/dev/null 2>&1; then
-        firewall_found=true
-        echo "版本: $(ufw version | head -n1)"
-        if systemctl is-enabled ufw >/dev/null 2>&1; then
-            echo -e "启用状态: ${GREEN}已启用${NC}"
-        else
-            echo -e "启用状态: ${RED}未启用${NC}"
-        fi
-        if ufw status | grep -q "Status: active"; then
-            echo -e "运行状态: ${GREEN}运行中${NC}"
-        else
-            echo -e "运行状态: ${RED}未运行${NC}"
-        fi
-    else
-        echo -e "版本: ${RED}未安装${NC}"
-        echo -e "启用状态: ${RED}未安装${NC}"
-        echo -e "运行状态: ${RED}未安装${NC}"
-    fi
-
-    # 检查Firewalld
-    echo -e "\nFirewalld状态:"
-    if command -v firewall-cmd >/dev/null 2>&1; then
-        firewall_found=true
-        echo "版本: $(firewall-cmd --version 2>/dev/null)"
-        if systemctl is-enabled firewalld >/dev/null 2>&1; then
-            echo -e "启用状态: ${GREEN}已启用${NC}"
-        else
-            echo -e "启用状态: ${RED}未启用${NC}"
-        fi
-        if systemctl is-active firewalld >/dev/null 2>&1; then
-            echo -e "运行状态: ${GREEN}运行中${NC}"
-        else
-            echo -e "运行状态: ${RED}未运行${NC}"
-        fi
-    else
-        echo -e "版本: ${RED}未安装${NC}"
-        echo -e "启用状态: ${RED}未安装${NC}"
-        echo -e "运行状态: ${RED}未安装${NC}"
-    fi
-
-    # 检查IPTables
-    echo -e "\nIPTables状态:"
+    echo -e "\n${YELLOW}检查防火墙状态...${NC}"
+    
+    # 检查 iptables
     if command -v iptables >/dev/null 2>&1; then
-        firewall_found=true
-        echo "版本: $(iptables --version)"
-        if systemctl is-enabled iptables >/dev/null 2>&1; then
-            echo -e "启用状态: ${GREEN}已启用${NC}"
+        echo -e "\n${BLUE}IPTables状态:${NC}"
+        # 检查是否有任何规则
+        if iptables -L -n | grep -q '^Chain' || iptables -L -n | grep -q '^ACCEPT\|^DROP\|^REJECT'; then
+            echo -e "${GREEN}IPTables 已配置${NC}"
+            firewall_found=true
         else
-            echo -e "启用状态: ${RED}未启用${NC}"
-        fi
-        if iptables -L >/dev/null 2>&1; then
-            echo -e "运行状态: ${GREEN}可用${NC}"
-        else
-            echo -e "运行状态: ${RED}不可用${NC}"
+            echo -e "${YELLOW}IPTables 已安装但没有配置规则${NC}"
         fi
     else
-        echo -e "版本: ${RED}未安装${NC}"
-        echo -e "启用状态: ${RED}未安装${NC}"
-        echo -e "运行状态: ${RED}未安装${NC}"
+        echo -e "${YELLOW}IPTables 未安装${NC}"
     fi
-
-    # 如果没有找到任何防火墙
+    
+    # 检查 firewalld
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        echo -e "\n${BLUE}Firewalld状态:${NC}"
+        if systemctl is-active --quiet firewalld; then
+            echo -e "${GREEN}Firewalld 正在运行${NC}"
+            firewall_found=true
+        else
+            echo -e "${YELLOW}Firewalld 已安装但未运行${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Firewalld 未安装${NC}"
+    fi
+    
+    # 检查 ufw
+    if command -v ufw >/dev/null 2>&1; then
+        echo -e "\n${BLUE}UFW状态:${NC}"
+        if ufw status | grep -q "Status: active"; then
+            echo -e "${GREEN}UFW 正在运行${NC}"
+            firewall_found=true
+        else
+            echo -e "${YELLOW}UFW 已安装但未启用${NC}"
+        fi
+    else
+        echo -e "${YELLOW}UFW 未安装${NC}"
+    fi
+    
     if [ "$firewall_found" = false ]; then
-        echo -e "\n${RED}未检测到已安装的防火墙。${NC}"
-        echo -e "请使用选项 2 安装防火墙。"
+        echo -e "\n${RED}警告: 未检测到正在运行的防火墙${NC}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 获取已安装的防火墙类型
+get_installed_firewall() {
+    if command -v iptables >/dev/null 2>&1 && (iptables -L -n | grep -q '^Chain' || iptables -L -n | grep -q '^ACCEPT\|^DROP\|^REJECT'); then
+        echo "iptables"
+        return 0
+    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+        echo "firewalld"
+        return 0
+    elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        echo "ufw"
+        return 0
+    else
+        echo "none"
+        return 1
     fi
 }
 
@@ -249,19 +244,6 @@ install_firewall() {
         fi
     else
         echo -e "${RED}安装失败${NC}"
-    fi
-}
-
-# 获取已安装的防火墙类型
-get_installed_firewall() {
-    if command -v iptables >/dev/null 2>&1 && systemctl is-active iptables >/dev/null 2>&1; then
-        echo "iptables"
-    elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active firewalld >/dev/null 2>&1; then
-        echo "firewalld"
-    elif command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
-        echo "ufw"
-    else
-        echo "none"
     fi
 }
 
