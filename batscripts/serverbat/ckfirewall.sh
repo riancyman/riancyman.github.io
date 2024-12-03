@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.8
+# 版本: v1.0.9
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -142,6 +142,46 @@ check_firewall_status() {
     fi
 }
 
+# 显示当前开放的端口
+show_open_ports() {
+    local firewall_type=$1
+    echo -e "\n${YELLOW}当前开放的端口:${NC}"
+    
+    case $firewall_type in
+        "iptables")
+            echo -e "\n${BLUE}IPTables当前开放的端口:${NC}"
+            # 检查 INPUT 链中的所有开放端口
+            echo "TCP端口:"
+            iptables -L INPUT -n -v | grep -E "^[[:space:]]*[0-9]+" | grep "tcp dpt:" | sed -E 's/.*dpt:([0-9]+).*/\1/' | sort -n | uniq
+            echo "UDP端口:"
+            iptables -L INPUT -n -v | grep -E "^[[:space:]]*[0-9]+" | grep "udp dpt:" | sed -E 's/.*dpt:([0-9]+).*/\1/' | sort -n | uniq
+            
+            # 检查 ACCEPT 默认策略
+            echo -e "\n防火墙默认策略:"
+            local input_policy=$(iptables -L INPUT | head -n1 | awk '{print $4}')
+            if [ "$input_policy" = "ACCEPT" ]; then
+                echo -e "${GREEN}INPUT链默认策略: ACCEPT (允许所有)${NC}"
+            else
+                echo -e "${RED}INPUT链默认策略: $input_policy${NC}"
+            fi
+            
+            # 检查网络连接状态
+            echo -e "\n当前活动连接:"
+            netstat -tunlp | grep -E "^tcp|^udp" | awk '{print $4}' | cut -d: -f2 | sort -n | uniq | while read port; do
+                echo "端口 $port: $(netstat -tunlp | grep ":$port" | awk '{print $7}' | cut -d/ -f2 | head -n1)"
+            done
+            ;;
+        "firewalld")
+            echo -e "\n${BLUE}Firewalld当前开放的端口:${NC}"
+            firewall-cmd --list-all
+            ;;
+        "ufw")
+            echo -e "\n${BLUE}UFW当前开放的端口:${NC}"
+            ufw status verbose
+            ;;
+    esac
+}
+
 # 安装防火墙
 install_firewall() {
     echo -e "\n${YELLOW}可选的防火墙:${NC}"
@@ -228,21 +268,8 @@ configure_ports() {
         return 1
     fi
     
-    echo -e "\n${YELLOW}当前开放的端口:${NC}"
-    case $firewall_type in
-        "iptables")
-            echo -e "\n${BLUE}IPTables当前开放的端口:${NC}"
-            iptables -L INPUT -n --line-numbers | grep "dpt:" | sed 's/.*dpt:\([0-9]*\).*/\1/'
-            ;;
-        "firewalld")
-            echo -e "\n${BLUE}Firewalld当前开放的端口:${NC}"
-            firewall-cmd --list-ports
-            ;;
-        "ufw")
-            echo -e "\n${BLUE}UFW当前开放的端口:${NC}"
-            ufw status numbered | grep -E "^[[0-9]+]" | grep -oE "[0-9]+/[tcp|udp]" | sed 's/\/.*//'
-            ;;
-    esac
+    # 显示当前开放的端口
+    show_open_ports "$firewall_type"
 
     echo -e "\n请输入要开放的端口（用逗号分隔，例如: 80,443,22）:"
     read ports
@@ -258,12 +285,13 @@ configure_ports() {
         case $firewall_type in
             "iptables")
                 # 检查端口是否已经开放
-                if iptables -L INPUT -n | grep "dpt:$port" >/dev/null 2>&1; then
+                if iptables -L INPUT -n | grep -E "dpt:$port( |$)" >/dev/null 2>&1; then
                     echo -e "${YELLOW}端口 $port 已经开放${NC}"
                     continue
                 fi
-                iptables -A INPUT -p tcp --dport $port -j ACCEPT
-                iptables -A INPUT -p udp --dport $port -j ACCEPT
+                # 添加到 INPUT 链的最前面，确保在 REJECT 规则之前
+                iptables -I INPUT -p tcp --dport $port -j ACCEPT
+                iptables -I INPUT -p udp --dport $port -j ACCEPT
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}端口 $port 已开放${NC}"
                     # 保存规则
@@ -305,6 +333,10 @@ configure_ports() {
                 ;;
         esac
     done
+    
+    # 显示更新后的端口状态
+    echo -e "\n${YELLOW}更新后的端口状态:${NC}"
+    show_open_ports "$firewall_type"
 }
 
 # 配置防火墙自启动
