@@ -41,6 +41,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
+# 定义版本号
+VERSION="v1.0.16"
+
 # 检查是否为root用户
 check_root() {
     if [ "$(id -u)" != "0" ]; then
@@ -225,48 +228,109 @@ show_open_ports() {
 # 安装防火墙
 install_firewall() {
     echo -e "\n${YELLOW}可选的防火墙:${NC}"
-    echo "1) UFW"
-    echo "2) IPTables"
-    echo "3) Firewalld"
-    echo "4) UFW + IPTables"
-    echo "5) 返回主菜单"
+    echo "1) UFW (推荐)"
+    echo "2) Firewalld"
+    echo "3) IPTables"
+    echo "4) 返回"
     
-    read -p "请选择要安装的防火墙 (1-5): " choice
+    read -p "请选择要安装的防火墙 (1-4): " choice
     
     case $choice in
         1)
-            echo -e "\n${YELLOW}安装UFW...${NC}"
             if [ -f /etc/debian_version ]; then
-                apt-get update && apt-get install -y ufw
+                apt-get update
+                apt-get install -y ufw
+                ufw enable
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}UFW安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}UFW安装失败${NC}"
+                fi
             elif [ -f /etc/redhat-release ]; then
                 yum install -y ufw
+                systemctl enable ufw
+                systemctl start ufw
+                ufw enable
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}UFW安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}UFW安装失败${NC}"
+                fi
             fi
             ;;
         2)
-            echo -e "\n${YELLOW}安装IPTables...${NC}"
             if [ -f /etc/debian_version ]; then
-                apt-get update && apt-get install -y iptables
+                apt-get update
+                apt-get install -y firewalld
+                systemctl enable firewalld
+                systemctl start firewalld
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}Firewalld安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}Firewalld安装失败${NC}"
+                fi
             elif [ -f /etc/redhat-release ]; then
-                yum install -y iptables-services
+                yum install -y firewalld
+                systemctl enable firewalld
+                systemctl start firewalld
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}Firewalld安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}Firewalld安装失败${NC}"
+                fi
             fi
             ;;
         3)
-            echo -e "\n${YELLOW}安装Firewalld...${NC}"
             if [ -f /etc/debian_version ]; then
-                apt-get update && apt-get install -y firewalld
+                apt-get update
+                apt-get install -y iptables
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}IPTables安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}IPTables安装失败${NC}"
+                fi
             elif [ -f /etc/redhat-release ]; then
-                yum install -y firewalld
+                yum install -y iptables-services
+                systemctl enable iptables
+                systemctl start iptables
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}IPTables安装成功${NC}"
+                    echo -e "\n${YELLOW}是否要配置端口? (y/n):${NC}"
+                    read -p "" configure_ports
+                    if [ "$configure_ports" = "y" ]; then
+                        configure_ports
+                    fi
+                else
+                    echo -e "${RED}IPTables安装失败${NC}"
+                fi
             fi
             ;;
         4)
-            echo -e "\n${YELLOW}安装UFW和IPTables...${NC}"
-            if [ -f /etc/debian_version ]; then
-                apt-get update && apt-get install -y ufw iptables
-            elif [ -f /etc/redhat-release ]; then
-                yum install -y ufw iptables-services
-            fi
-            ;;
-        5)
             return
             ;;
         *)
@@ -274,16 +338,6 @@ install_firewall() {
             return
             ;;
     esac
-
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}安装成功${NC}"
-        read -p "是否要配置端口? (y/n): " config_ports
-        if [ "$config_ports" = "y" ]; then
-            configure_ports
-        fi
-    else
-        echo -e "${RED}安装失败${NC}"
-    fi
 }
 
 # 配置端口
@@ -607,65 +661,52 @@ check_diagnostic() {
     echo -e "\n${GREEN}诊断信息收集完成${NC}"
 }
 
-# 主菜单
+# 显示菜单
 show_menu() {
+    clear
+    get_system_info
+    echo -e "${BLUE}防火墙管理菜单${NC}"
+    echo -e "${YELLOW}当前版本: $VERSION${NC}\n"
+    echo "1) 检查防火墙状态"
+    echo "2) 重装防火墙"
+    echo "3) 配置防火墙端口"
+    echo "4) 开启防火墙自动重启"
+    echo "5) 重启防火墙"
+    echo "6) 卸载防火墙"
+    echo "7) 检查诊断信息"
+    echo "8) 退出"
+    echo ""
+    echo -e "请选择操作 (1-8): "
+}
+
+# 主菜单循环
+main_menu() {
     while true; do
-        clear
-        get_system_info
-        echo -e "\n${YELLOW}防火墙管理菜单${NC}"
-        echo "1) 检查防火墙状态"
-        echo "2) 重装防火墙"
-        echo "3) 配置防火墙端口"
-        echo "4) 开启防火墙自动重启"
-        echo "5) 重启防火墙"
-        echo "6) 卸载防火墙"
-        echo "7) 检查诊断信息"
-        echo "8) 退出"
-        echo ""
-        echo -e "请选择操作 (1-8): "
+        show_menu
+        read -p "" choice
         
-        # 读取用户输入
-        read choice </dev/tty || exit 1
-        
-        # 处理用户选择
-        case "$choice" in
-            1) 
-                clear
-                check_firewall_status
-                ;;
-            2) 
-                install_firewall
-                ;;
-            3) 
-                configure_ports
-                ;;
-            4) 
-                configure_autostart
-                ;;
-            5) 
-                restart_firewall
-                ;;
-            6) 
-                uninstall_firewall
-                ;;
-            7) 
-                check_diagnostic
-                ;;
+        case $choice in
+            1) check_firewall_status ;;
+            2) install_firewall ;;
+            3) configure_ports ;;
+            4) configure_autostart ;;
+            5) restart_firewall ;;
+            6) uninstall_firewall ;;
+            7) check_diagnostic ;;
             8) 
                 echo "退出程序"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}无效选择${NC}"
+                echo -e "${RED}无效的选择，请重试${NC}"
                 ;;
         esac
-
-        # 等待用户按回车继续
-        echo -e "\n按回车键继续..."
-        read -p "" </dev/tty || exit 1
+        
+        echo -e "\n${YELLOW}按回车键继续...${NC}"
+        read
     done
 }
 
 # 主程序开始
 check_root
-show_menu
+main_menu
