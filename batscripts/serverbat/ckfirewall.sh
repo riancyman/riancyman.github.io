@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.4
+# 版本: v1.0.5
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -23,15 +23,10 @@
 # 使用方法:
 # 1. 远程调用(推荐):
 #    curl方式:
-#    curl -sSL https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh | sudo bash
+#    curl -sSL https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh -o ckfirewall.sh && sudo bash ckfirewall.sh
 #    
 #    wget方式:
-#    wget -qO- https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh | sudo bash
-#
-# 2. 本地使用:
-#    下载后需要添加执行权限:
-#    chmod +x ckfirewall.sh
-#    sudo ./ckfirewall.sh
+#    wget -qO ckfirewall.sh https://riancyman.github.io/batscripts/serverbat/ckfirewall.sh && sudo bash ckfirewall.sh
 #
 # 注意事项:
 # 1. 需要root权限执行
