@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.13
+# 版本: v1.0.14
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -427,40 +427,84 @@ restart_firewall() {
 
 # 卸载防火墙
 uninstall_firewall() {
-    echo -e "\n${YELLOW}警告: 这将卸载所有已安装的防火墙${NC}"
-    read -p "是否继续? (y/n): " confirm
+    echo -e "\n${YELLOW}正在卸载防火墙...${NC}"
     
-    if [ "$confirm" != "y" ]; then
-        return
-    fi
-    
+    # 清理 UFW
     if command -v ufw >/dev/null 2>&1; then
+        echo -e "\n${BLUE}清理 UFW...${NC}"
         ufw disable
+        ufw reset --force
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge -y ufw
+            apt-get remove --purge ufw -y
+            apt-get autoremove -y
         elif [ -f /etc/redhat-release ]; then
-            yum remove -y ufw
+            yum remove ufw -y
         fi
-        echo "UFW已卸载"
+        rm -rf /etc/ufw
+        echo -e "${GREEN}UFW 已完全清理${NC}"
     fi
     
+    # 清理 Firewalld
     if command -v firewall-cmd >/dev/null 2>&1; then
+        echo -e "\n${BLUE}清理 Firewalld...${NC}"
         systemctl stop firewalld
+        systemctl disable firewalld
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge -y firewalld
+            apt-get remove --purge firewalld -y
+            apt-get autoremove -y
         elif [ -f /etc/redhat-release ]; then
-            yum remove -y firewalld
+            yum remove firewalld -y
         fi
-        echo "Firewalld已卸载"
+        rm -rf /etc/firewalld
+        echo -e "${GREEN}Firewalld 已完全清理${NC}"
     fi
     
+    # 清理 IPTables
     if command -v iptables >/dev/null 2>&1; then
+        echo -e "\n${BLUE}清理 IPTables...${NC}"
+        # 清空所有规则
+        iptables -F
+        iptables -X
+        iptables -t nat -F
+        iptables -t nat -X
+        iptables -t mangle -F
+        iptables -t mangle -X
+        iptables -P INPUT ACCEPT
+        iptables -P FORWARD ACCEPT
+        iptables -P OUTPUT ACCEPT
+        
+        # 删除 iptables 配置文件
+        rm -f /etc/iptables/rules.v4
+        rm -f /etc/iptables/rules.v6
+        rm -f /etc/sysconfig/iptables
+        rm -f /etc/sysconfig/ip6tables
+        
+        # 卸载 iptables 服务
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge -y iptables
+            apt-get remove --purge iptables -y
+            apt-get autoremove -y
         elif [ -f /etc/redhat-release ]; then
-            yum remove -y iptables-services
+            yum remove iptables-services -y
         fi
-        echo "IPTables已卸载"
+        echo -e "${GREEN}IPTables 已完全清理${NC}"
+    fi
+    
+    echo -e "\n${GREEN}所有防火墙已完全清理，包括规则和配置文件${NC}"
+    
+    # 验证清理结果
+    echo -e "\n${YELLOW}验证清理结果:${NC}"
+    if command -v ufw >/dev/null 2>&1; then
+        echo -e "${RED}警告: UFW 仍然存在${NC}"
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        echo -e "${RED}警告: Firewalld 仍然存在${NC}"
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        echo -e "${RED}警告: IPTables 仍然存在${NC}"
+    fi
+    
+    if ! command -v ufw >/dev/null 2>&1 && ! command -v firewall-cmd >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+        echo -e "${GREEN}验证通过: 所有防火墙已成功清理${NC}"
     fi
 }
 
