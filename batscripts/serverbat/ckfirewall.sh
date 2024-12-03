@@ -2,7 +2,7 @@
 
 #########################################################################
 # 名称: Linux防火墙管理脚本
-# 版本: v1.0.16
+# 版本: v1.0.17
 # 作者: 叮当的老爷
 # 最后更新: 2024-12-03
 #########################################################################
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 BLUE='\033[0;34m'
 
 # 定义版本号
-VERSION="v1.0.16"
+VERSION="v1.0.17"
 
 # 检查是否为root用户
 check_root() {
@@ -50,23 +50,6 @@ check_root() {
         echo -e "${RED}错误: 此脚本需要root权限运行${NC}"
         exit 1
     fi
-}
-
-# 获取系统信息
-get_system_info() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_NAME=$NAME
-        OS_VERSION=$VERSION_ID
-    elif [ -f /etc/lsb-release ]; then
-        . /etc/lsb-release
-        OS_NAME=$DISTRIB_ID
-        OS_VERSION=$DISTRIB_RELEASE
-    else
-        OS_NAME=$(uname -s)
-        OS_VERSION=$(uname -r)
-    fi
-    echo -e "${BLUE}当前系统: $OS_NAME $OS_VERSION${NC}"
 }
 
 # 检查防火墙状态
@@ -512,30 +495,30 @@ uninstall_firewall() {
     # 清理 UFW
     if command -v ufw >/dev/null 2>&1; then
         echo -e "\n${BLUE}清理 UFW...${NC}"
-        ufw disable
-        ufw reset --force
+        ufw disable >/dev/null 2>&1
+        ufw reset --force >/dev/null 2>&1
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge ufw -y
-            apt-get autoremove -y
+            apt-get remove --purge ufw -y >/dev/null 2>&1
+            apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum remove ufw -y
+            yum remove ufw -y >/dev/null 2>&1
         fi
-        rm -rf /etc/ufw
+        rm -rf /etc/ufw >/dev/null 2>&1
         echo -e "${GREEN}UFW 已完全清理${NC}"
     fi
     
     # 清理 Firewalld
     if command -v firewall-cmd >/dev/null 2>&1; then
         echo -e "\n${BLUE}清理 Firewalld...${NC}"
-        systemctl stop firewalld
-        systemctl disable firewalld
+        systemctl stop firewalld >/dev/null 2>&1
+        systemctl disable firewalld >/dev/null 2>&1
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge firewalld -y
-            apt-get autoremove -y
+            apt-get remove --purge firewalld -y >/dev/null 2>&1
+            apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum remove firewalld -y
+            yum remove firewalld -y >/dev/null 2>&1
         fi
-        rm -rf /etc/firewalld
+        rm -rf /etc/firewalld >/dev/null 2>&1
         echo -e "${GREEN}Firewalld 已完全清理${NC}"
     fi
     
@@ -543,28 +526,28 @@ uninstall_firewall() {
     if command -v iptables >/dev/null 2>&1; then
         echo -e "\n${BLUE}清理 IPTables...${NC}"
         # 清空所有规则
-        iptables -F
-        iptables -X
-        iptables -t nat -F
-        iptables -t nat -X
-        iptables -t mangle -F
-        iptables -t mangle -X
-        iptables -P INPUT ACCEPT
-        iptables -P FORWARD ACCEPT
-        iptables -P OUTPUT ACCEPT
+        iptables -F >/dev/null 2>&1
+        iptables -X >/dev/null 2>&1
+        iptables -t nat -F >/dev/null 2>&1
+        iptables -t nat -X >/dev/null 2>&1
+        iptables -t mangle -F >/dev/null 2>&1
+        iptables -t mangle -X >/dev/null 2>&1
+        iptables -P INPUT ACCEPT >/dev/null 2>&1
+        iptables -P FORWARD ACCEPT >/dev/null 2>&1
+        iptables -P OUTPUT ACCEPT >/dev/null 2>&1
         
         # 删除 iptables 配置文件
-        rm -f /etc/iptables/rules.v4
-        rm -f /etc/iptables/rules.v6
-        rm -f /etc/sysconfig/iptables
-        rm -f /etc/sysconfig/ip6tables
+        rm -f /etc/iptables/rules.v4 >/dev/null 2>&1
+        rm -f /etc/iptables/rules.v6 >/dev/null 2>&1
+        rm -f /etc/sysconfig/iptables >/dev/null 2>&1
+        rm -f /etc/sysconfig/ip6tables >/dev/null 2>&1
         
         # 卸载 iptables 服务
         if [ -f /etc/debian_version ]; then
-            apt-get remove --purge iptables -y
-            apt-get autoremove -y
+            apt-get remove --purge iptables -y >/dev/null 2>&1
+            apt-get autoremove -y >/dev/null 2>&1
         elif [ -f /etc/redhat-release ]; then
-            yum remove iptables-services -y
+            yum remove iptables-services -y >/dev/null 2>&1
         fi
         echo -e "${GREEN}IPTables 已完全清理${NC}"
     fi
@@ -573,17 +556,22 @@ uninstall_firewall() {
     
     # 验证清理结果
     echo -e "\n${YELLOW}验证清理结果:${NC}"
+    local has_remaining=false
+    
     if command -v ufw >/dev/null 2>&1; then
         echo -e "${RED}警告: UFW 仍然存在${NC}"
+        has_remaining=true
     fi
     if command -v firewall-cmd >/dev/null 2>&1; then
         echo -e "${RED}警告: Firewalld 仍然存在${NC}"
+        has_remaining=true
     fi
     if command -v iptables >/dev/null 2>&1; then
         echo -e "${RED}警告: IPTables 仍然存在${NC}"
+        has_remaining=true
     fi
     
-    if ! command -v ufw >/dev/null 2>&1 && ! command -v firewall-cmd >/dev/null 2>&1 && ! command -v iptables >/dev/null 2>&1; then
+    if [ "$has_remaining" = false ]; then
         echo -e "${GREEN}验证通过: 所有防火墙已成功清理${NC}"
     fi
 }
@@ -664,7 +652,6 @@ check_diagnostic() {
 # 显示菜单
 show_menu() {
     clear
-    get_system_info
     echo -e "${BLUE}防火墙管理菜单${NC}"
     echo -e "${YELLOW}当前版本: $VERSION${NC}\n"
     echo "1) 检查防火墙状态"
@@ -674,9 +661,9 @@ show_menu() {
     echo "5) 重启防火墙"
     echo "6) 卸载防火墙"
     echo "7) 检查诊断信息"
-    echo "8) 退出"
+    echo "0) 退出"
     echo ""
-    echo -e "请选择操作 (1-8): "
+    echo -e "请选择操作 (0-7): "
 }
 
 # 主菜单循环
@@ -693,8 +680,8 @@ main_menu() {
             5) restart_firewall ;;
             6) uninstall_firewall ;;
             7) check_diagnostic ;;
-            8) 
-                echo "退出程序"
+            0) 
+                echo -e "\n${GREEN}退出程序${NC}"
                 exit 0
                 ;;
             *)
