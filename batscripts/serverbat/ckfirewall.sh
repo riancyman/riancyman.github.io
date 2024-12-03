@@ -75,8 +75,11 @@ get_system_info() {
 check_firewall_status() {
     echo -e "\n${YELLOW}检查防火墙状态...${NC}"
     
+    local firewall_found=false
+    
     # 检查UFW
     if command -v ufw >/dev/null 2>&1; then
+        firewall_found=true
         echo -e "\nUFW状态:"
         echo "版本: $(ufw version | head -n1)"
         if systemctl is-enabled ufw >/dev/null 2>&1; then
@@ -93,6 +96,7 @@ check_firewall_status() {
 
     # 检查Firewalld
     if command -v firewall-cmd >/dev/null 2>&1; then
+        firewall_found=true
         echo -e "\nFirewalld状态:"
         echo "版本: $(firewall-cmd --version)"
         if systemctl is-enabled firewalld >/dev/null 2>&1; then
@@ -109,6 +113,7 @@ check_firewall_status() {
 
     # 检查IPTables
     if command -v iptables >/dev/null 2>&1; then
+        firewall_found=true
         echo -e "\nIPTables状态:"
         echo "版本: $(iptables --version)"
         if iptables -L >/dev/null 2>&1; then
@@ -116,6 +121,12 @@ check_firewall_status() {
         else
             echo -e "状态: ${RED}不可用${NC}"
         fi
+    fi
+
+    # 如果没有找到任何防火墙
+    if [ "$firewall_found" = false ]; then
+        echo -e "\n${RED}未检测到已安装的防火墙。${NC}"
+        echo -e "请使用选项 2 安装防火墙。"
     fi
 }
 
