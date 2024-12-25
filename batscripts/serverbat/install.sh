@@ -641,10 +641,24 @@ server {
 }
 
 server {
-    listen 127.0.0.1:80;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name ${domain};
     root /usr/share/nginx/html;
     
+    ssl_certificate /etc/trojan-go/cert/${domain}.pem;
+    ssl_certificate_key /etc/trojan-go/cert/${domain}.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305";
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver_timeout 5s;
+
     location /ws {
         proxy_redirect off;
         proxy_http_version 1.1;
