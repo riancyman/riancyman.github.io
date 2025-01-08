@@ -325,49 +325,62 @@ apply_cert() {
     
     echo "[$(date)] [INFO] 开始申请SSL证书..."
     
-    # 设置DNS API环境变量
+    # 设置 DNS API 环境变量
     export DuckDNS_Token="${token}"
     
-    # 使用DNS API模式申请证书
-    echo "[$(date)] [INFO] 开始申请证书..."
-    ~/.acme.sh/acme.sh --issue --dns dns_duckdns \
-        -d "${domain}" \
-        --accountemail "${email}" \
-        --server letsencrypt \
-        --dnssleep 120 \
-        --debug 2
+    # 添加延迟和重试机制
+    local max_retries=3
+    local retry_count=0
+    local wait_time=120  # 增加等待时间到 120 秒
+    
+    while [ $retry_count -lt $max_retries ]; do
+        echo "[$(date)] [INFO] 尝试申请证书 (尝试 $((retry_count + 1))/$max_retries)"
+        
+        # 先更新 DuckDNS 记录
+        curl -s "https://www.duckdns.org/update?domains=${domain%%.*}&token=${token}&txt=verify" || true
+        echo "[$(date)] [INFO] 等待 DNS 记录生效 (${wait_time}秒)..."
+        sleep $wait_time
+        
+        # 使用 --debug 2 来获取更详细的错误信息
+        ~/.acme.sh/acme.sh --issue --dns dns_duckdns \
+            -d "${domain}" \
+            --accountemail "${email}" \
+            --server letsencrypt \
+            --dnssleep $wait_time \
+            --debug 2
+        
+        if [ $? -eq 0 ]; then
+            echo "[$(date)] [INFO] 证书申请成功！"
+            break
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                echo "[$(date)] [WARNING] 证书申请失败，等待重试..."
+                wait_time=$((wait_time + 60))  # 每次重试增加等待时间
+                sleep 30
+            else
+                echo "[$(date)] [ERROR] 证书申请失败，已达到最大重试次数"
+                return 1
+            fi
+        fi
+    done
 
-    if [ $? -ne 0 ]; then
-        echo "[$(date)] [ERROR] 证书申请失败"
-        return 1
-    fi
-
-    # 验证证书是否成功申请
+    # 验证证书文件
     local cert_path="$HOME/.acme.sh/${domain}_ecc/${domain}.cer"
     local key_path="$HOME/.acme.sh/${domain}_ecc/${domain}.key"
     local fullchain_path="$HOME/.acme.sh/${domain}_ecc/fullchain.cer"
     
     if [ ! -f "$cert_path" ] || [ ! -f "$key_path" ] || [ ! -f "$fullchain_path" ]; then
         echo "[$(date)] [ERROR] 证书文件未生成"
-        echo "[$(date)] 证书路径: $cert_path"
-        echo "[$(date)] 密钥路径: $key_path"
-        echo "[$(date)] 完整链路径: $fullchain_path"
         return 1
     fi
 
-    # 安装证书到 Trojan-Go 目录
-    echo "[$(date)] [INFO] 安装证书到 Trojan-Go 目录..."
+    # 安装证书
     mkdir -p /etc/trojan-go
     ~/.acme.sh/acme.sh --install-cert -d "${domain}" --ecc \
         --key-file /etc/trojan-go/server.key \
         --fullchain-file /etc/trojan-go/server.crt
-        
-    if [ $? -ne 0 ]; then
-        echo "[$(date)] [ERROR] 证书安装到 Trojan-Go 目录失败"
-        return 1
-    fi
 
-    echo "[$(date)] [INFO] SSL证书申请并安装成功"
     return 0
 }
 
