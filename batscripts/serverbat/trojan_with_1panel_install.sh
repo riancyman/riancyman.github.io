@@ -449,6 +449,32 @@ check_acme() {
     return 0
 }
 
+# 解析 acme.sh 错误信息
+parse_acme_error() {
+    local output=$1
+    
+    # 检查常见错误
+    if echo "$output" | grep -q "Domains not changed"; then
+        log "WARNING" "域名未变化，证书可能已存在"
+    fi
+    
+    if echo "$output" | grep -q "Skipping. Next renewal time"; then
+        log "WARNING" "证书未到续期时间，已跳过"
+    fi
+    
+    if echo "$output" | grep -q "Add '--force' to force renewal"; then
+        log "INFO" "提示：需要强制续期参数"
+    fi
+    
+    if echo "$output" | grep -q "DNS problem"; then
+        log "ERROR" "DNS 验证失败，请检查域名解析"
+    fi
+    
+    if echo "$output" | grep -q "timeout"; then
+        log "ERROR" "请求超时，请检查网络连接"
+    fi
+}
+
 # 检查证书是否存在且有效
 check_cert() {
     local domain=$1
@@ -491,6 +517,7 @@ apply_cert() {
     local domain=$1
     local email=$2
     local token=$3
+    local force_renew=false
     
     # 先检查证书是否已存在且有效
     if check_cert "$domain"; then
@@ -500,6 +527,8 @@ apply_cert() {
             log "INFO" "使用现有的有效证书"
             copy_cert_files "$domain"
             return 0
+        else
+            force_renew=true
         fi
     fi
     
@@ -522,23 +551,37 @@ apply_cert() {
         log "INFO" "等待 DNS 记录生效 (${wait_time}秒)..."
         sleep $wait_time
         
-        # 申请证书
-        if ~/.acme.sh/acme.sh --issue --dns dns_duckdns \
-            -d "${domain}" \
-            --accountemail "${email}" \
-            --server letsencrypt \
-            --dnssleep $wait_time \
-            --log; then
+        # 根据情况选择申请或续期命令
+        local acme_result
+        if [ "$force_renew" = true ]; then
+            # 强制续期现有证书
+            log "INFO" "强制续期现有证书..."
+            acme_result=$(~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force --dns dns_duckdns --dnssleep $wait_time --log 2>&1)
+        else
+            # 首次申请证书
+            log "INFO" "首次申请证书..."
+            acme_result=$(~/.acme.sh/acme.sh --issue --dns dns_duckdns \
+                -d "${domain}" \
+                --accountemail "${email}" \
+                --server letsencrypt \
+                --dnssleep $wait_time \
+                --log 2>&1)
+        fi
+        
+        if [ $? -eq 0 ]; then
             log "INFO" "证书申请成功！"
             break
         else
+            log "WARNING" "证书申请失败"
+            parse_acme_error "$acme_result"
             retry_count=$((retry_count + 1))
             if [ $retry_count -lt $max_retries ]; then
-                log "WARNING" "证书申请失败，等待重试..."
+                log "WARNING" "等待重试..."
                 wait_time=$((wait_time + 60))
                 sleep 30
             else
                 log "ERROR" "证书申请失败，已达到最大重试次数"
+                log "ERROR" "详细错误信息: $acme_result"
                 return 1
             fi
         fi
@@ -610,7 +653,11 @@ update_cert() {
     export DuckDNS_Token="${duckdns_token}"
     
     # 强制更新证书
-    if ~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force; then
+    log "INFO" "执行强制证书更新..."
+    local renew_result
+    renew_result=$(~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force --dns dns_duckdns --log 2>&1)
+    
+    if [ $? -eq 0 ]; then
         log "INFO" "证书更新成功"
         copy_cert_files "$domain"
         
@@ -624,6 +671,8 @@ update_cert() {
         return 0
     else
         log "ERROR" "证书更新失败"
+        parse_acme_error "$renew_result"
+        log "ERROR" "详细错误信息: $renew_result"
         return 1
     fi
 }
