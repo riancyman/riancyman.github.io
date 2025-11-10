@@ -27,19 +27,17 @@ echo -e "${PLAIN}"
 
 # 版本信息和说明
 echo -e "${GREEN}=====================================================${PLAIN}"
-echo -e "${GREEN}              Trojan-Go 管理脚本 v2.1                ${PLAIN}"
-echo -e "${GREEN}     系统支持: Debian 12/13, Ubuntu, CentOS        ${PLAIN}"
-echo -e "${GREEN}     新增功能: 服务器初始化 + UFW防火墙          ${PLAIN}"
+echo -e "${GREEN}              Trojan-Go 管理脚本 v2.0                ${PLAIN}"
+echo -e "${GREEN}         系统支持: Ubuntu, Debian, CentOS            ${PLAIN}"
 echo -e "${GREEN}=====================================================${PLAIN}"
 echo -e "
+
 注意事项:
 1. 安装前请确保已解析域名到本机
 2. 支持 DuckDNS 域名自动申请证书
 3. 配置采用 WebSocket + TLS
 4. 密码将自动随机生成
 5. 支持证书自动更新和手动更新
-6. 新增服务器初始化功能 (Debian 12/13 优化)
-7. 支持SSH端口修改和UFW防火墙配置
 "
 
 # 日志函数
@@ -87,25 +85,13 @@ set_status() {
 # 检查系统
 check_sys() {
     if [[ -f /etc/debian_version ]]; then
-        local debian_version=$(cat /etc/debian_version)
-        log "INFO" "检测到 Debian/Ubuntu 系统，版本: $debian_version"
-        
-        # 检查是否为 Debian 12/13
-        if [[ "$debian_version" =~ ^12\. ]] || [[ "$debian_version" =~ ^13\. ]]; then
-            log "INFO" "系统版本受支持: Debian 12/13"
-            return 0
-        elif [[ "$debian_version" =~ ^11\. ]]; then
-            log "WARNING" "检测到 Debian 11，建议升级到 Debian 12+"
-            return 0
-        else
-            log "INFO" "Debian/Ubuntu 系统，继续安装"
-            return 0
-        fi
+        log "INFO" "检测到 Debian/Ubuntu 系统"
+        return 0
     elif [[ -f /etc/redhat-release ]]; then
         log "INFO" "检测到 CentOS/RHEL 系统"
         return 0
     else
-        log "ERROR" "系统不支持，请使用 Debian 12+/Ubuntu/CentOS"
+        log "ERROR" "系统不支持，请使用 Debian/Ubuntu/CentOS"
         exit 1
     fi
 }
@@ -131,26 +117,6 @@ check_network() {
     return 0
 }
 
-# 检查服务状态
-check_service_status() {
-    local service_name=$1
-    if systemctl is-active --quiet "$service_name"; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# 检查端口占用
-check_port_in_use() {
-    local port=$1
-    if netstat -tlnp | grep -q ":$port "; then
-        return 0
-    else
-        return 1
-    fi
-}
-
 # 安装必要的工具
 install_requirements() {
     log "INFO" "安装必要的工具..."
@@ -170,451 +136,6 @@ install_requirements() {
     fi
     
     log "INFO" "必要工具安装完成"
-    return 0
-}
-
-# 服务器初始化 - 安装基础工具
-init_server_basic() {
-    log "INFO" "开始服务器基础初始化..."
-    
-    log "INFO" "更新软件包列表..."
-    if [[ -f /etc/debian_version ]]; then
-        apt update -y
-        apt upgrade -y
-        apt install -y unzip wget curl cron nano vim htop net-tools lsof
-    elif [[ -f /etc/redhat-release ]]; then
-        yum update -y
-        yum install -y unzip wget curl crontabs nano vim htop net-tools lsof
-    fi
-    
-    if [ $? -eq 0 ]; then
-        log "INFO" "基础工具安装完成"
-    else
-        log "ERROR" "基础工具安装失败"
-        return 1
-    fi
-    
-    # 设置时区为亚洲/上海
-    timedatectl set-timezone Asia/Shanghai
-    log "INFO" "时区已设置为 Asia/Shanghai"
-    
-    # 配置 vim
-    if [ ! -f ~/.vimrc ]; then
-        echo "set number" > ~/.vimrc
-        echo "set tabstop=4" >> ~/.vimrc
-        echo "set shiftwidth=4" >> ~/.vimrc
-        log "INFO" "vim 基础配置已完成"
-    fi
-    
-    return 0
-}
-
-# 获取当前SSH端口
-get_current_ssh_port() {
-    local current_port=$(grep "^Port" /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
-    if [ -z "$current_port" ]; then
-        current_port=22  # SSH默认端口
-    fi
-    echo "$current_port"
-}
-
-# 修改SSH端口
-change_ssh_port() {
-    log "INFO" "SSH端口配置管理"
-    
-    local current_port=$(get_current_ssh_port)
-    log "INFO" "当前SSH端口: ${YELLOW}$current_port${PLAIN}"
-    
-    echo -e "${GREEN}请选择操作:${PLAIN}"
-    echo "1. 保持当前端口 ($current_port)"
-    echo "2. 修改为其他端口"
-    echo "3. 查看端口占用情况"
-    echo "4. 取消操作"
-    
-    read -p "请输入选择 [1-4]: " choice
-    
-    case $choice in
-        1)
-            log "INFO" "保持当前SSH端口: $current_port"
-            return 0
-            ;;
-        2)
-            ;;
-        3)
-            log "INFO" "当前监听端口:"
-            netstat -tlnp | grep -E "(ssh|sshd)" || echo "暂无SSH服务监听"
-            echo ""
-            read -p "按Enter键继续端口修改..."
-            ;;
-        4)
-            log "INFO" "取消SSH端口修改"
-            return 0
-            ;;
-        *)
-            log "WARNING" "无效选择，取消操作"
-            return 1
-            ;;
-    esac
-    
-    # 如果选择了修改端口，继续执行
-    if [ "$choice" != "2" ]; then
-        return 0
-    fi
-    
-    echo -e "${YELLOW}⚠️  警告: 修改SSH端口前请确保:${PLAIN}"
-    echo "   - 您有其他方式访问服务器(如控制台)"
-    echo "   - 新端口未被防火墙阻止"
-    echo "   - 记住新端口号"
-    echo ""
-    
-    while true; do
-        read -p "请输入新的SSH端口 (1-65535，建议1024-65535): " new_port
-        
-        # 验证端口格式
-        if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
-            log "ERROR" "端口必须是 1-65535 之间的数字"
-            continue
-        fi
-        
-        # 检查是否为常用危险端口
-        if [ "$new_port" -lt 1024 ] && [ "$new_port" != "22" ]; then
-            log "WARNING" "端口 $new_port 是特权端口(小于1024)，可能需要特殊权限"
-            read -p "是否继续使用此端口? [y/N] " confirm_low
-            if [[ "${confirm_low,,}" != "y" ]]; then
-                continue
-            fi
-        fi
-        
-        # 检查端口是否被占用
-        if check_port_in_use "$new_port"; then
-            log "WARNING" "端口 $new_port 已被以下服务占用:"
-            netstat -tlnp | grep ":$new_port "
-            read -p "是否强制使用该端口? [y/N] " force_confirm
-            if [[ "${force_confirm,,}" != "y" ]]; then
-                continue
-            fi
-        fi
-        
-        # 确认修改
-        echo ""
-        log "INFO" "确认修改SSH端口: ${YELLOW}$current_port${PLAIN} → ${GREEN}$new_port${PLAIN}"
-        read -p "确认要修改SSH端口吗? [y/N] " final_confirm
-        
-        if [[ "${final_confirm,,}" == "y" ]]; then
-            break
-        else
-            log "INFO" "取消端口修改"
-            return 0
-        fi
-    done
-    
-    # 创建备份
-    local backup_file="/etc/ssh/sshd_config.backup.$(date +%Y%m%d_%H%M%S)"
-    cp /etc/ssh/sshd_config "$backup_file"
-    log "INFO" "SSH配置文件已备份到: $backup_file"
-    
-    # 修改端口
-    log "INFO" "正在修改SSH配置..."
-    if grep -q "^Port" /etc/ssh/sshd_config; then
-        sed -i "s/^Port.*/Port $new_port/" /etc/ssh/sshd_config
-    else
-        sed -i "1i Port $new_port" /etc/ssh/sshd_config
-    fi
-    
-    # 验证配置
-    log "INFO" "验证SSH配置..."
-    if [[ -f /etc/debian_version ]]; then
-        sshd -t
-    elif [[ -f /etc/redhat-release ]]; then
-        sshd -t
-    fi
-    
-    if [ $? -ne 0 ]; then
-        log "ERROR" "SSH配置验证失败，恢复备份配置"
-        cp "$backup_file" /etc/ssh/sshd_config
-        return 1
-    fi
-    
-    # 重启SSH服务
-    log "INFO" "重启SSH服务..."
-    if [[ -f /etc/debian_version ]]; then
-        systemctl restart ssh
-    elif [[ -f /etc/redhat-release ]]; then
-        systemctl restart sshd
-    fi
-    
-    if [ $? -eq 0 ]; then
-        log "INFO" "SSH端口修改成功！"
-        echo -e "${GREEN}=====================================================${PLAIN}"
-        log "WARNING" "重要提醒:"
-        log "WARNING" "SSH端口已修改为: ${YELLOW}$new_port${PLAIN}"
-        log "WARNING" "下次登录请使用新端口: ssh user@your_server -p $new_port"
-        log "WARNING" "配置文件备份在: $backup_file"
-        echo -e "${GREEN}=====================================================${PLAIN}"
-        
-        # 保存新端口到状态文件
-        set_status "ssh_port" "$new_port"
-        set_status "ssh_config_backup" "$backup_file"
-        
-        return 0
-    else
-        log "ERROR" "SSH服务重启失败，恢复备份配置"
-        cp "$backup_file" /etc/ssh/sshd_config
-        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
-        return 1
-    fi
-}
-
-# 安装和配置UFW防火墙
-setup_ufw_firewall() {
-    log "INFO" "开始配置UFW防火墙..."
-    
-    # 检查UFW是否已安装
-    if ! command -v ufw &> /dev/null; then
-        log "INFO" "安装UFW防火墙..."
-        if [[ -f /etc/debian_version ]]; then
-            apt install -y ufw
-        elif [[ -f /etc/redhat-release ]]; then
-            yum install -y ufw
-        fi
-        
-        if [ $? -ne 0 ]; then
-            log "ERROR" "UFW安装失败"
-            return 1
-        fi
-    fi
-    
-    # 获取当前SSH端口
-    local current_ssh_port=$(get_current_ssh_port)
-    log "INFO" "检测到当前SSH端口: ${YELLOW}$current_ssh_port${PLAIN}"
-    
-    # 重置UFW（清除现有规则）
-    ufw --force reset
-    
-    # 设置默认策略
-    ufw default deny incoming
-    ufw default allow outgoing
-    
-    log "INFO" "防火墙默认策略: 拒绝入站，允许出站"
-    
-    # SSH端口处理 - 智能提示
-    echo ""
-    echo -e "${YELLOW}🔥 SSH端口配置检测${PLAIN}"
-    echo "当前SSH端口: $current_ssh_port"
-    
-    if [ "$current_ssh_port" == "22" ]; then
-        echo -e "${YELLOW}⚠️  警告: 您正在使用默认SSH端口22${PLAIN}"
-        echo "建议修改为其他端口以增强安全性"
-        read -p "是否要修改SSH端口? [y/N] " change_port
-        
-        if [[ "${change_port,,}" == "y" ]]; then
-            # 先修改SSH端口
-            change_ssh_port
-            if [ $? -eq 0 ]; then
-                # 重新获取端口
-                current_ssh_port=$(get_current_ssh_port)
-                log "INFO" "SSH端口已更新为: $current_ssh_port"
-            else
-                log "WARNING" "SSH端口修改失败，继续使用端口22"
-                current_ssh_port=22
-            fi
-        else
-            log "INFO" "继续使用SSH端口22"
-        fi
-    else
-        echo -e "${GREEN}✓ SSH端口已设置为非默认端口，安全性较好${PLAIN}"
-        read -p "是否保持当前SSH端口? [Y/n] " keep_port
-        if [[ "${keep_port,,}" == "n" ]]; then
-            change_ssh_port
-            if [ $? -eq 0 ]; then
-                current_ssh_port=$(get_current_ssh_port)
-            fi
-        fi
-    fi
-    
-    # 开放SSH端口
-    ufw allow "$current_ssh_port/tcp" comment "SSH Port"
-    log "INFO" "已开放SSH端口: $current_ssh_port"
-    
-    # 询问是否开放Web端口
-    echo ""
-    echo -e "${GREEN}🌐 Web服务端口配置${PLAIN}"
-    read -p "是否要开放Web服务端口(80/443)? [Y/n] " web_ports
-    
-    if [[ "${web_ports,,}" != "n" ]]; then
-        ufw allow 80/tcp comment 'HTTP Web'
-        ufw allow 443/tcp comment 'HTTPS Web'
-        log "INFO" "已开放Web端口: 80, 443"
-    fi
-    
-    # 询问是否开放Trojan端口
-    echo ""
-    echo -e "${GREEN}🔒 Trojan代理端口配置${PLAIN}"
-    read -p "是否要开放Trojan代理端口? [y/N] " trojan_ports
-    
-    if [[ "${trojan_ports,,}" == "y" ]]; then
-        read -p "请输入Trojan端口 (默认443): " trojan_port
-        if [[ -z "$trojan_port" ]]; then
-            trojan_port=443
-        fi
-        
-        if check_port_in_use "$trojan_port"; then
-            log "INFO" "检测到端口 $trojan_port 已被使用"
-        fi
-        
-        ufw allow "$trojan_port/tcp" comment "Trojan Proxy"
-        log "INFO" "已开放Trojan端口: $trojan_port"
-    fi
-    
-    # 自定义端口配置
-    echo ""
-    echo -e "${GREEN}🔧 自定义端口配置${PLAIN}"
-    echo "当前已开放端口:"
-    ufw status | grep -E "^[[:space:]]*[0-9]+" || echo "暂无规则"
-    echo ""
-    
-    read -p "是否要添加其他自定义端口? [y/N] " custom_ports
-    
-    if [[ "${custom_ports,,}" == "y" ]]; then
-        while true; do
-            echo ""
-            read -p "请输入要开放的端口 (1-65535) 或输入 'done' 完成: " port
-            if [[ "$port" == "done" ]]; then
-                break
-            fi
-            
-            if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-                log "ERROR" "端口必须是 1-65535 之间的数字"
-                continue
-            fi
-            
-            # 检查端口冲突
-            if check_port_in_use "$port"; then
-                log "WARNING" "端口 $port 当前被占用:"
-                netstat -tlnp | grep ":$port " | head -3
-                read -p "仍要开放此端口? [y/N] " force_open
-                if [[ "${force_open,,}" != "y" ]]; then
-                    continue
-                fi
-            fi
-            
-            read -p "请输入协议 (tcp/udp/both) [tcp]: " protocol
-            if [[ -z "$protocol" ]]; then
-                protocol="tcp"
-            fi
-            
-            read -p "请输入备注说明 (可选): " comment
-            
-            case $protocol in
-                tcp|udp)
-                    if [[ -n "$comment" ]]; then
-                        ufw allow "$port/$protocol" comment "$comment"
-                    else
-                        ufw allow "$port/$protocol"
-                    fi
-                    ;;
-                both)
-                    if [[ -n "$comment" ]]; then
-                        ufw allow "$port/tcp" comment "$comment (TCP)"
-                        ufw allow "$port/udp" comment "$comment (UDP)"
-                    else
-                        ufw allow "$port/tcp"
-                        ufw allow "$port/udp"
-                    fi
-                    ;;
-                *)
-                    log "ERROR" "协议必须是 tcp, udp 或 both"
-                    continue
-                    ;;
-            esac
-            
-            log "INFO" "已开放端口: $port ($protocol)"
-        done
-    fi
-    
-    # 防火墙规则预览
-    echo ""
-    echo -e "${GREEN}📋 防火墙规则预览${PLAIN}"
-    echo "即将启用的防火墙规则:"
-    ufw show added | grep -v "^###" | grep -v "^$" || echo "暂无规则"
-    echo ""
-    
-    # 启用防火墙确认
-    echo -e "${YELLOW}⚠️  重要提醒:${PLAIN}"
-    echo "启用防火墙后:"
-    echo "  - SSH端口 $current_ssh_port 将被开放"
-    echo "  - 其他端口需要手动开放"
-    echo "  - 错误的配置可能导致连接中断"
-    echo ""
-    
-    # 创建防火墙规则备份
-    local ufw_backup="/etc/ufw/before.rules.backup.$(date +%Y%m%d_%H%M%S)"
-    cp /etc/ufw/before.rules "$ufw_backup" 2>/dev/null || true
-    log "INFO" "UFW规则已备份到: $ufw_backup"
-    
-    read -p "确认启用UFW防火墙? [y/N] " confirm
-    
-    if [[ "${confirm,,}" == "y" ]]; then
-        log "INFO" "正在启用UFW防火墙..."
-        
-        # 先尝试测试连接
-        echo "正在测试防火墙配置..."
-        
-        # 启用防火墙
-        ufw --force enable
-        systemctl enable ufw
-        
-        if [ $? -eq 0 ]; then
-            log "INFO" "UFW防火墙已成功启用"
-            
-            # 保存状态
-            set_status "ufw_enabled" "true"
-            set_status "ufw_backup" "$ufw_backup"
-            
-            # 显示状态
-            echo ""
-            echo -e "${GREEN}🔥 UFW防火墙状态${PLAIN}"
-            ufw status verbose
-            
-            echo ""
-            echo -e "${GREEN}✅ 防火墙配置完成${PLAIN}"
-            log "INFO" "防火墙规则数量: $(ufw status | grep -c "^[[:space:]]*[0-9]")"
-            
-        else
-            log "ERROR" "UFW防火墙启用失败"
-            echo "尝试恢复备份配置..."
-            cp "$ufw_backup" /etc/ufw/before.rules 2>/dev/null || true
-            return 1
-        fi
-    else
-        log "INFO" "UFW防火墙未启用，配置已保存但未激活"
-        echo "您可以稍后手动启用: ufw --force enable"
-    fi
-}
-
-# 服务器完整初始化
-init_server() {
-    log "INFO" "开始完整服务器初始化..."
-    
-    # 1. 基础工具安装
-    init_server_basic || return 1
-    
-    # 2. SSH端口修改
-    change_ssh_port || log "WARNING" "SSH端口修改失败或跳过"
-    
-    # 3. UFW防火墙配置
-    setup_ufw_firewall || log "WARNING" "UFW防火墙配置失败"
-    
-    log "INFO" "服务器初始化完成!"
-    log "INFO" "建议重启服务器以应用所有更改"
-    
-    read -p "是否立即重启服务器? [y/N] " reboot_answer
-    if [[ "${reboot_answer,,}" == "y" ]]; then
-        log "INFO" "服务器将在5秒后重启..."
-        sleep 5
-        reboot
-    fi
-    
     return 0
 }
 
@@ -1398,7 +919,7 @@ show_logs() {
 # 显示菜单
 show_menu() {
     echo -e "
-  ${GREEN}Trojan-Go 管理脚本 v2.1${PLAIN}
+  ${GREEN}Trojan-Go 管理脚本 v2.0${PLAIN}
   ${GREEN}0.${PLAIN} 退出脚本
   ${GREEN}1.${PLAIN} 安装 Trojan-Go
   ${GREEN}2.${PLAIN} 更新 Trojan-Go
@@ -1411,10 +932,6 @@ show_menu() {
   ${GREEN}9.${PLAIN} 显示 OpenResty 配置
   ${GREEN}10.${PLAIN} 更新 SSL 证书
   ${GREEN}11.${PLAIN} 查看日志
-  ${GREEN}12.${PLAIN} 服务器初始化
-  ${GREEN}13.${PLAIN} 基础工具安装
-  ${GREEN}14.${PLAIN} 修改SSH端口
-  ${GREEN}15.${PLAIN} 配置UFW防火墙
   "
     read -p "请输入数字: " num
     case "$num" in
@@ -1455,20 +972,8 @@ show_menu() {
     11)
         show_logs
         ;;
-    12)
-        init_server
-        ;;
-    13)
-        init_server_basic
-        ;;
-    14)
-        change_ssh_port
-        ;;
-    15)
-        setup_ufw_firewall
-        ;;
     *)
-        log "WARNING" "请输入正确的数字 (0-15)"
+        log "WARNING" "请输入正确的数字 (0-11)"
         ;;
     esac
 }
