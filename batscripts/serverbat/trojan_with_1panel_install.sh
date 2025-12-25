@@ -27,7 +27,7 @@ echo -e "${PLAIN}"
 
 # 版本信息和说明
 echo -e "${GREEN}=====================================================${PLAIN}"
-echo -e "${GREEN}              Trojan-Go 管理脚本 v2.1                ${PLAIN}"
+echo -e "${GREEN}              Trojan-Go 管理脚本 v2.2                ${PLAIN}"
 echo -e "${GREEN}     系统支持: Debian 12/13, Ubuntu, CentOS        ${PLAIN}"
 echo -e "${GREEN}     新增功能: 服务器初始化 + UFW防火墙          ${PLAIN}"
 echo -e "${GREEN}=====================================================${PLAIN}"
