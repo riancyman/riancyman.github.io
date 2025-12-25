@@ -752,20 +752,31 @@ install_trojan() {
         log "ERROR" "邮箱格式不正确"
         return 1
     fi
-    
-    # 获取DuckDNS token
-    read -p "请输入 DuckDNS token: " duckdns_token
-    if [ -z "$duckdns_token" ]; then
-        log "ERROR" "DuckDNS token 不能为空"
-        return 1
-    fi
 
-    # 验证DuckDNS域名是否可以访问
-    log "INFO" "验证DuckDNS域名..."
-    local domain_name="${domain%%.*}"
-    if ! curl -s "https://www.duckdns.org/update?domains=${domain_name}&token=${duckdns_token}&txt=verify" | grep -q "OK"; then
-        log "ERROR" "DuckDNS域名验证失败，请检查token是否正确"
-        return 1
+    # 询问证书申请方式
+    echo -e "${GREEN}请选择证书申请方式:${PLAIN}"
+    echo "1. HTTP 验证 (推荐，需确保域名已解析到本机且80端口开放)"
+    echo "2. DNS API 验证 (仅支持 DuckDNS，无需80端口，但可能存在延迟)"
+    read -p "请输入选择 [1-2] (默认1): " cert_method
+    [[ -z "$cert_method" ]] && cert_method="1"
+    
+    local duckdns_token=""
+    
+    if [ "$cert_method" == "2" ]; then
+        # 获取DuckDNS token
+        read -p "请输入 DuckDNS token: " duckdns_token
+        if [ -z "$duckdns_token" ]; then
+            log "ERROR" "DuckDNS token 不能为空"
+            return 1
+        fi
+
+        # 验证DuckDNS域名是否可以访问
+        log "INFO" "验证DuckDNS域名..."
+        local domain_name="${domain%%.*}"
+        if ! curl -s "https://www.duckdns.org/update?domains=${domain_name}&token=${duckdns_token}&txt=verify" | grep -q "OK"; then
+            log "ERROR" "DuckDNS域名验证失败，请检查token是否正确"
+            return 1
+        fi
     fi
 
     # 提示用户输入配置信息
@@ -789,13 +800,6 @@ install_trojan() {
     mkdir -p /etc/trojan-go
     
     # 申请证书
-    # 询问证书申请方式
-    echo -e "${GREEN}请选择证书申请方式:${PLAIN}"
-    echo "1. HTTP 验证 (推荐，需确保域名已解析到本机且80端口开放)"
-    echo "2. DNS API 验证 (仅支持 DuckDNS，无需80端口，但可能存在延迟)"
-    read -p "请输入选择 [1-2] (默认1): " cert_method
-    [[ -z "$cert_method" ]] && cert_method="1"
-    
     if [ "$cert_method" == "1" ]; then
         apply_cert_http "$domain" "$email"
     else
