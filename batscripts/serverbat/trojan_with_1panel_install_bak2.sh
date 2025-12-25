@@ -1002,99 +1002,8 @@ check_cert() {
     return 0
 }
 
-# 申请证书 - HTTP 方式
-apply_cert_http() {
-    check_acme || return 1
-    local domain=$1
-    local email=$2
-    
-    # 先检查证书是否已存在且有效
-    if check_cert "$domain"; then
-        log "INFO" "当前证书仍然有效"
-        read -p "是否要强制重新申请证书？[y/N] " answer
-        if [[ "${answer,,}" != "y" ]]; then
-            log "INFO" "使用现有的有效证书"
-            copy_cert_files "$domain"
-            return 0
-        fi
-    fi
-    
-    log "INFO" "准备使用 HTTP 方式申请证书..."
-    
-    # 检查80端口
-    local stopped_service=""
-    if check_port_in_use 80; then
-        log "WARNING" "检测到 80 端口被占用"
-        local port80_pid=$(netstat -tlnp | grep ":80 " | awk '{print $7}' | cut -d'/' -f1 | head -n1)
-        if [ -n "$port80_pid" ]; then
-             log "INFO" "占用进程PID: $port80_pid"
-        fi
-        
-        echo -e "${YELLOW}HTTP 验证需要占用 80 端口。${PLAIN}"
-        read -p "是否允许脚本尝试临时停止相关服务以申请证书？[y/N] " allow_stop
-        
-        if [[ "${allow_stop,,}" == "y" ]]; then
-            # 尝试识别服务并停止
-            if systemctl is-active --quiet nginx; then
-                log "INFO" "停止 Nginx 服务..."
-                systemctl stop nginx
-                stopped_service="nginx"
-            elif systemctl is-active --quiet openresty; then
-                log "INFO" "停止 OpenResty 服务..."
-                systemctl stop openresty
-                stopped_service="openresty"
-            elif systemctl is-active --quiet httpd; then
-                log "INFO" "停止 Apache 服务..."
-                systemctl stop httpd
-                stopped_service="httpd"
-            else
-                log "INFO" "尝试使用 fuser/kill 释放端口..."
-                if command -v fuser &> /dev/null; then
-                    fuser -k 80/tcp
-                elif [ -n "$port80_pid" ]; then
-                    kill -9 "$port80_pid"
-                fi
-                sleep 2
-            fi
-            
-            # 再次检查
-            if check_port_in_use 80; then
-                log "ERROR" "无法释放 80 端口，请手动停止占用 80 端口的服务后重试"
-                return 1
-            fi
-        else
-            log "ERROR" "80 端口被占用，无法继续 HTTP 验证"
-            return 1
-        fi
-    fi
-    
-    # 申请证书
-    log "INFO" "开始申请证书 (HTTP Standalone)..."
-    local acme_result
-    acme_result=$(~/.acme.sh/acme.sh --issue -d "${domain}" --standalone --accountemail "${email}" --server letsencrypt --log 2>&1)
-    local install_status=$?
-    
-    # 恢复服务
-    if [ -n "$stopped_service" ]; then
-        log "INFO" "正在恢复服务: $stopped_service"
-        systemctl start "$stopped_service"
-    fi
-    
-    if [ $install_status -eq 0 ]; then
-        log "INFO" "证书申请成功！"
-        copy_cert_files "$domain"
-        set_status "cert_update_time" "$(date '+%Y-%m-%d %H:%M:%S')"
-        set_status "cert_mode" "http"
-        return 0
-    else
-        log "ERROR" "证书申请失败"
-        log "ERROR" "详细错误信息: $acme_result"
-        return 1
-    fi
-}
-
-# 申请证书 - DNS 方式
-apply_cert_dns() {
+# 申请证书
+apply_cert() {
     check_acme || return 1
     local domain=$1
     local email=$2
@@ -1114,7 +1023,7 @@ apply_cert_dns() {
         fi
     fi
     
-    log "INFO" "开始申请SSL证书 (DNS DuckDNS)..."
+    log "INFO" "开始申请SSL证书..."
     
     # 设置 DNS API 环境变量
     export DuckDNS_Token="${token}"
@@ -1174,7 +1083,6 @@ apply_cert_dns() {
     
     # 设置证书更新时间
     set_status "cert_update_time" "$(date '+%Y-%m-%d %H:%M:%S')"
-    set_status "cert_mode" "dns"
     
     return 0
 }
@@ -1220,72 +1128,27 @@ update_cert() {
     local domain=$(get_status "domain")
     local email=$(get_status "email")
     local duckdns_token=$(get_status "duckdns_token")
-    local cert_mode=$(get_status "cert_mode")
     
-    if [ -z "$domain" ]; then
+    if [ -z "$domain" ] || [ -z "$email" ] || [ -z "$duckdns_token" ]; then
         log "ERROR" "缺少证书配置信息，请重新安装"
         return 1
     fi
     
-    # 默认模式处理
-    if [ -z "$cert_mode" ]; then
-        cert_mode="dns" # 兼容旧版本
-    fi
+    # 强制更新证书
+    log "INFO" "域名: $domain"
+    log "INFO" "邮箱: $email"
     
     check_acme || return 1
     
+    # 设置环境变量
+    export DuckDNS_Token="${duckdns_token}"
+    
+    # 强制更新证书
+    log "INFO" "执行强制证书更新..."
     local renew_result
-    local stopped_service=""
-    local ret_code=0
+    renew_result=$(~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force --dns dns_duckdns --log 2>&1)
     
-    if [ "$cert_mode" == "http" ]; then
-        log "INFO" "检测到证书使用 HTTP 方式申请"
-        
-        # 检查并处理 80 端口
-        if check_port_in_use 80; then
-            log "WARNING" "80 端口被占用，尝试自动释放..."
-            if systemctl is-active --quiet nginx; then
-                systemctl stop nginx
-                stopped_service="nginx"
-            elif systemctl is-active --quiet openresty; then
-                systemctl stop openresty
-                stopped_service="openresty"
-            elif systemctl is-active --quiet httpd; then
-                systemctl stop httpd
-                stopped_service="httpd"
-            else
-                local port80_pid=$(netstat -tlnp | grep ":80 " | awk '{print $7}' | cut -d'/' -f1 | head -n1)
-                if [ -n "$port80_pid" ]; then
-                    kill -9 "$port80_pid"
-                fi
-            fi
-            sleep 2
-        fi
-        
-        log "INFO" "执行证书续期 (HTTP Standalone)..."
-        renew_result=$(~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force --log 2>&1)
-        ret_code=$?
-        
-    else
-        # DNS 模式
-        if [ -z "$duckdns_token" ]; then
-            log "ERROR" "缺少 DuckDNS Token"
-            return 1
-        fi
-        
-        log "INFO" "执行证书续期 (DNS DuckDNS)..."
-        export DuckDNS_Token="${duckdns_token}"
-        renew_result=$(~/.acme.sh/acme.sh --renew -d "${domain}" --ecc --force --dns dns_duckdns --log 2>&1)
-        ret_code=$?
-    fi
-    
-    # 恢复服务
-    if [ -n "$stopped_service" ]; then
-        log "INFO" "恢复服务: $stopped_service"
-        systemctl start "$stopped_service"
-    fi
-    
-    if [ $ret_code -eq 0 ]; then
+    if [ $? -eq 0 ]; then
         log "INFO" "证书更新成功"
         copy_cert_files "$domain"
         
