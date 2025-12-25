@@ -27,9 +27,9 @@ echo -e "${PLAIN}"
 
 # 版本信息和说明
 echo -e "${GREEN}=====================================================${PLAIN}"
-echo -e "${GREEN}              Trojan-Go 管理脚本 v2.2                ${PLAIN}"
+echo -e "${GREEN}              Trojan-Go 管理脚本 v2.3                ${PLAIN}"
 echo -e "${GREEN}     系统支持: Debian 12/13, Ubuntu, CentOS        ${PLAIN}"
-echo -e "${GREEN}     新增功能: 服务器初始化 + UFW防火墙          ${PLAIN}"
+echo -e "${GREEN}     新增功能: Webroot证书模式 + 端口检测优化     ${PLAIN}"
 echo -e "${GREEN}=====================================================${PLAIN}"
 echo -e "
 注意事项:
@@ -144,9 +144,21 @@ check_service_status() {
 # 检查端口占用
 check_port_in_use() {
     local port=$1
-    if netstat -tlnp | grep -q ":$port "; then
-        return 0
+    # 优先使用 ss，不存在则使用 netstat
+    if command -v ss &> /dev/null; then
+        if ss -tlnp | grep -q ":$port " 2>/dev/null; then
+            return 0
+        else
+            return 1
+        fi
+    elif command -v netstat &> /dev/null; then
+        if netstat -tlnp | grep -q ":$port " 2>/dev/null; then
+            return 0
+        else
+            return 1
+        fi
     else
+        log "WARNING" "ss 和 netstat 命令都不可用，无法检查端口占用"
         return 1
     fi
 }
@@ -157,13 +169,13 @@ install_requirements() {
     
     if [[ -f /etc/debian_version ]]; then
         apt update -qq
-        apt install -y socat curl wget unzip openssl cron || {
+        apt install -y socat curl wget unzip openssl cron net-tools lsof || {
             log "ERROR" "工具安装失败"
             return 1
         }
     elif [[ -f /etc/redhat-release ]]; then
         yum update -y -q
-        yum install -y socat curl wget unzip openssl crontabs || {
+        yum install -y socat curl wget unzip openssl crontabs net-tools lsof || {
             log "ERROR" "工具安装失败"
             return 1
         }
@@ -755,14 +767,50 @@ install_trojan() {
 
     # 询问证书申请方式
     echo -e "${GREEN}请选择证书申请方式:${PLAIN}"
-    echo "1. HTTP 验证 (推荐，需确保域名已解析到本机且80端口开放)"
-    echo "2. DNS API 验证 (仅支持 DuckDNS，无需80端口，但可能存在延迟)"
-    read -p "请输入选择 [1-2] (默认1): " cert_method
+    echo "1. HTTP 验证 - Webroot 模式 (推荐，适用于已有Web服务器，如1Panel/Nginx/OpenResty)"
+    echo "2. HTTP 验证 - Standalone 模式 (需要临时占用80端口，会尝试停止现有Web服务)"
+    echo "3. DNS API 验证 (仅支持 DuckDNS，无需80端口，但可能存在延迟)"
+    read -p "请输入选择 [1-3] (默认1): " cert_method
     [[ -z "$cert_method" ]] && cert_method="1"
     
     local duckdns_token=""
+    local webroot_path=""
     
-    if [ "$cert_method" == "2" ]; then
+    if [ "$cert_method" == "1" ]; then
+        # Webroot 模式，需要指定网站根目录
+        echo -e "${GREEN}Webroot 模式说明:${PLAIN}"
+        echo "  - 适用于已有 Web 服务器（如 1Panel/Nginx/OpenResty）"
+        echo "  - 需要指定网站的根目录路径"
+        echo "  - 常见路径示例:"
+        echo "    1Panel: /opt/1panel/apps/openresty/openresty/www/sites/{域名}/index"
+        echo "    Nginx:  /var/www/html 或 /usr/share/nginx/html"
+        echo ""
+        read -p "请输入网站根目录路径: " webroot_path
+        
+        # 验证路径
+        if [ -z "$webroot_path" ]; then
+            log "ERROR" "网站根目录不能为空"
+            return 1
+        fi
+        
+        if [ ! -d "$webroot_path" ]; then
+            log "WARNING" "目录不存在: $webroot_path"
+            read -p "是否创建该目录? [y/N] " create_dir
+            if [[ "${create_dir,,}" == "y" ]]; then
+                mkdir -p "$webroot_path" || {
+                    log "ERROR" "创建目录失败"
+                    return 1
+                }
+                log "INFO" "目录已创建: $webroot_path"
+            else
+                log "ERROR" "无法继续，请提供有效的网站根目录"
+                return 1
+            fi
+        fi
+        
+        log "INFO" "使用 Webroot 模式，路径: $webroot_path"
+        
+    elif [ "$cert_method" == "3" ]; then
         # 获取DuckDNS token
         read -p "请输入 DuckDNS token: " duckdns_token
         if [ -z "$duckdns_token" ]; then
@@ -801,6 +849,8 @@ install_trojan() {
     
     # 申请证书
     if [ "$cert_method" == "1" ]; then
+        apply_cert_webroot "$domain" "$email" "$webroot_path"
+    elif [ "$cert_method" == "2" ]; then
         apply_cert_http "$domain" "$email"
     else
         apply_cert_dns "$domain" "$email" "$duckdns_token"
@@ -1006,7 +1056,83 @@ check_cert() {
     return 0
 }
 
-# 申请证书 - HTTP 方式
+# 申请证书 - Webroot 方式（推荐，适用于已有Web服务器）
+apply_cert_webroot() {
+    check_acme || return 1
+    local domain=$1
+    local email=$2
+    local webroot_path=$3
+    
+    # 先检查证书是否已存在且有效
+    if check_cert "$domain"; then
+        log "INFO" "当前证书仍然有效"
+        read -p "是否要强制重新申请证书？[y/N] " answer
+        if [[ "${answer,,}" != "y" ]]; then
+            log "INFO" "使用现有的有效证书"
+            copy_cert_files "$domain"
+            return 0
+        fi
+    fi
+    
+    log "INFO" "准备使用 Webroot 模式申请证书..."
+    log "INFO" "网站根目录: $webroot_path"
+    
+    # 创建 .well-known/acme-challenge 目录
+    local challenge_dir="${webroot_path}/.well-known/acme-challenge"
+    mkdir -p "$challenge_dir" || {
+        log "ERROR" "无法创建验证目录: $challenge_dir"
+        return 1
+    }
+    
+    # 设置目录权限
+    chmod -R 755 "${webroot_path}/.well-known"
+    log "INFO" "验证目录已创建: $challenge_dir"
+    
+    # 测试目录是否可通过 HTTP 访问
+    local test_file="${challenge_dir}/test_$(date +%s).txt"
+    echo "acme-test" > "$test_file"
+    local test_url="http://${domain}/.well-known/acme-challenge/$(basename $test_file)"
+    
+    log "INFO" "测试 HTTP 访问: $test_url"
+    if curl -s -f --connect-timeout 10 "$test_url" | grep -q "acme-test"; then
+        log "INFO" "HTTP 访问测试成功"
+        rm -f "$test_file"
+    else
+        log "WARNING" "无法通过 HTTP 访问测试文件"
+        log "WARNING" "请确保 Web 服务器配置允许访问 .well-known 目录"
+        rm -f "$test_file"
+        read -p "是否继续尝试申请证书? [y/N] " continue_anyway
+        if [[ "${continue_anyway,,}" != "y" ]]; then
+            return 1
+        fi
+    fi
+    
+    # 申请证书
+    log "INFO" "开始申请证书 (Webroot 模式)..."
+    local acme_result
+    acme_result=$(~/.acme.sh/acme.sh --issue -d "${domain}" \
+        --webroot "${webroot_path}" \
+        --accountemail "${email}" \
+        --server letsencrypt \
+        --log 2>&1)
+    local install_status=$?
+    
+    if [ $install_status -eq 0 ]; then
+        log "INFO" "证书申请成功！"
+        copy_cert_files "$domain"
+        set_status "cert_update_time" "$(date '+%Y-%m-%d %H:%M:%S')"
+        set_status "cert_mode" "webroot"
+        set_status "webroot_path" "$webroot_path"
+        return 0
+    else
+        log "ERROR" "证书申请失败"
+        log "ERROR" "详细错误信息: $acme_result"
+        parse_acme_error "$acme_result"
+        return 1
+    fi
+}
+
+# 申请证书 - HTTP Standalone 方式（需要停止现有Web服务）
 apply_cert_http() {
     check_acme || return 1
     local domain=$1
@@ -1029,9 +1155,16 @@ apply_cert_http() {
     local stopped_service=""
     if check_port_in_use 80; then
         log "WARNING" "检测到 80 端口被占用"
-        local port80_pid=$(netstat -tlnp | grep ":80 " | awk '{print $7}' | cut -d'/' -f1 | head -n1)
-        if [ -n "$port80_pid" ]; then
-             log "INFO" "占用进程PID: $port80_pid"
+        # 使用 ss 或 netstat 获取占用进程
+        local port80_info=""
+        if command -v ss &> /dev/null; then
+            port80_info=$(ss -tlnp | grep ":80 " | head -n1)
+        elif command -v netstat &> /dev/null; then
+            port80_info=$(netstat -tlnp | grep ":80 " | head -n1)
+        fi
+        
+        if [ -n "$port80_info" ]; then
+            log "INFO" "端口占用信息: $port80_info"
         fi
         
         echo -e "${YELLOW}HTTP 验证需要占用 80 端口。${PLAIN}"
@@ -1052,11 +1185,14 @@ apply_cert_http() {
                 systemctl stop httpd
                 stopped_service="httpd"
             else
-                log "INFO" "尝试使用 fuser/kill 释放端口..."
-                if command -v fuser &> /dev/null; then
+                log "INFO" "尝试使用 lsof/fuser 释放端口..."
+                if command -v lsof &> /dev/null; then
+                    local pids=$(lsof -ti:80)
+                    if [ -n "$pids" ]; then
+                        echo "$pids" | xargs kill -9
+                    fi
+                elif command -v fuser &> /dev/null; then
                     fuser -k 80/tcp
-                elif [ -n "$port80_pid" ]; then
-                    kill -9 "$port80_pid"
                 fi
                 sleep 2
             fi
@@ -1551,7 +1687,7 @@ show_logs() {
 # 显示菜单
 show_menu() {
     echo -e "
-  ${GREEN}Trojan-Go 管理脚本 v2.2${PLAIN}
+  ${GREEN}Trojan-Go 管理脚本 v2.3${PLAIN}
   ${GREEN}0.${PLAIN} 退出脚本
   ${GREEN}1.${PLAIN} 安装 Trojan-Go
   ${GREEN}2.${PLAIN} 更新 Trojan-Go
