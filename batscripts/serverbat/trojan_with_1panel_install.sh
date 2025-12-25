@@ -1551,7 +1551,7 @@ show_logs() {
 # 显示菜单
 show_menu() {
     echo -e "
-  ${GREEN}Trojan-Go 管理脚本 v2.1${PLAIN}
+  ${GREEN}Trojan-Go 管理脚本 v2.2${PLAIN}
   ${GREEN}0.${PLAIN} 退出脚本
   ${GREEN}1.${PLAIN} 安装 Trojan-Go
   ${GREEN}2.${PLAIN} 更新 Trojan-Go
